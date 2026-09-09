@@ -3,6 +3,7 @@ import sqlite3
 import secrets
 import string
 import ipaddress
+import re
 import requests
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -12,6 +13,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 APP_NAME = "PulseLink"
 OWNER = "ABSALEW BELAYNEH"
+OWNER_EMAIL = os.environ.get("PULSELINK_OWNER_EMAIL", "absalew1234@gmail.com")
 DB_PATH = os.environ.get("PULSELINK_DB", "pulselink.db")
 PORT = int(os.environ.get("PORT", "5000"))
 
@@ -31,6 +33,10 @@ def init_db():
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
+        full_name TEXT NOT NULL DEFAULT '',
+        email TEXT UNIQUE,
+        purpose TEXT NOT NULL DEFAULT '',
+        consent_at TEXT,
         password_hash TEXT NOT NULL,
         created_at TEXT NOT NULL
     );
@@ -66,6 +72,15 @@ def init_db():
     columns = {row[1] for row in con.execute("PRAGMA table_info(links)").fetchall()}
     if "user_id" not in columns:
         con.execute("ALTER TABLE links ADD COLUMN user_id INTEGER")
+    user_columns = {row[1] for row in con.execute("PRAGMA table_info(users)").fetchall()}
+    for name, definition in (
+        ("full_name", "TEXT NOT NULL DEFAULT ''"),
+        ("email", "TEXT"),
+        ("purpose", "TEXT NOT NULL DEFAULT ''"),
+        ("consent_at", "TEXT"),
+    ):
+        if name not in user_columns:
+            con.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
     con.commit()
     con.close()
 
@@ -228,7 +243,7 @@ a{color:inherit}.logo{font-weight:800;letter-spacing:1px}.logo span{color:#9ca3a
 .badge{display:inline-block;border:1px solid #d1d5db;border-radius:999px;padding:7px 12px;font-size:10px;color:#6b7280;letter-spacing:1px}
 h1{font-size:clamp(48px,8vw,84px);line-height:.95;letter-spacing:-5px;margin:24px 0}.hero p,.muted{color:#6b7280;line-height:1.7}
 .btn{display:inline-block;background:#111827;color:#fff;border:0;border-radius:8px;padding:12px 17px;font-weight:700;text-decoration:none;cursor:pointer}
-.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:22px;margin-top:18px}.form{display:flex;gap:10px}input{flex:1;padding:13px;border:1px solid #d1d5db;border-radius:8px;font-size:14px}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:22px;margin-top:18px}.form{display:flex;gap:10px}input,textarea{width:100%;padding:13px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;font-family:inherit}textarea{resize:vertical}.check{font-size:13px;color:#6b7280;line-height:1.5}.check input{width:auto;margin-right:8px}
 .result{margin-top:12px;padding:14px;border-radius:8px;background:#f3f4f6;word-break:break-all}.hidden{display:none}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}.stat{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px}.stat small{display:block;color:#6b7280;margin-bottom:7px}.stat strong{font-size:25px}
 .scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:12px 8px;border-top:1px solid #edf0f3;white-space:nowrap}th{color:#9ca3af;font-weight:500}
@@ -243,11 +258,11 @@ HOME = r"""
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" type="image/png" href="/favicon.ico">
 <title>{{owner}} — PulseLink</title><style>{{style}}</style></head><body>
-<header><div class="logo">ABSALEW <span>BELAYNEH</span></div><a class="navlink" href="/dashboard">Dashboard →</a></header>
+<header><div class="logo">ABSALEW <span>BELAYNEH</span></div><nav><a class="navlink" href="/login">Sign in</a> <a class="navlink" href="/signup">Create account</a></nav></header>
 <section class="hero"><div class="badge">ABSALEW BELAYNEH · PULSELINK</div>
 <h1>Every link.<br><span style="color:#6b7280">Measured.</span></h1>
 <p>A transparent link-analytics tool for clicks, browser/device data, referrers and approximate IP-based geography.</p>
-<a class="btn" href="/dashboard">Open Dashboard</a></section>
+<a class="btn" href="/signup">Create your account</a></section>
 <section class="wrap"><h2>Six-step process</h2><div class="steps">
 <div class="step"><b>01</b><h3>Link Mapping</h3><p>Enter a YouTube, Google, Instagram, website or other HTTPS destination. A unique code is generated and saved.</p></div>
 <div class="step"><b>02</b><h3>The Click</h3><p>The visitor opens your public tracking URL and sends a normal HTTPS request to your server.</p></div>
@@ -256,7 +271,7 @@ HOME = r"""
 <div class="step"><b>05</b><h3>302 Redirect</h3><p>The server records metrics and returns HTTP 302, instantly sending the visitor to the destination.</p></div>
 <div class="step"><b>06</b><h3>Dashboard</h3><p>Click totals, location details and approximate map markers appear in the dashboard.</p></div>
 </div></section>
-<footer style="text-align:center;padding:35px;color:#9ca3af;font-size:11px">© 2026 {{owner}}</footer>
+<footer style="text-align:center;padding:35px;color:#9ca3af;font-size:11px">© 2026 {{owner}} · Abuse reports: <a href="mailto:{{owner_email}}">{{owner_email}}</a></footer>
 </body></html>
 """
 
@@ -312,8 +327,12 @@ AUTH = r"""
 <header><div class="logo">ABSALEW <span>BELAYNEH</span></div><a class="navlink" href="/">← Home</a></header>
 <main class="wrap" style="max-width:520px"><div class="card"><div class="badge">PULSELINK ACCOUNT</div><h1 style="font-size:42px;letter-spacing:-2px">{{title}}</h1>
 {% if error %}<p style="color:#b91c1c">{{error}}</p>{% endif %}<form method="post">
+{% if title == 'Create account' %}<label>Full name</label><input name="full_name" maxlength="100" required autocomplete="name"><br><br>
+<label>Email address</label><input name="email" type="email" maxlength="254" required autocomplete="email"><br><br>
+<label>Why are you using PulseLink?</label><textarea name="purpose" maxlength="500" required rows="4" placeholder="For example: measuring campaign links"></textarea><br><br>{% endif %}
 <label>Username</label><input name="username" minlength="3" maxlength="40" required autocomplete="username"><br><br>
 <label>Password</label><input name="password" type="password" minlength="8" required autocomplete="{{'new-password' if title == 'Create account' else 'current-password'}}"><br><br>
+{% if title == 'Create account' %}<label class="check"><input name="consent" type="checkbox" required> I agree to the privacy notice and acceptable-use rules. I understand my account details may be used for security and abuse review.</label><br><br>{% endif %}
 <button class="btn" type="submit">{{title}}</button></form>
 <p class="muted">{% if title == 'Sign in' %}New here? <a href="/signup">Create an account</a>{% else %}Already registered? <a href="/login">Sign in</a>{% endif %}</p></div></main></body></html>
 """
@@ -328,29 +347,38 @@ def favicon():
 
 @app.get("/")
 def home():
-    return render_template_string(HOME, style=STYLE, owner=OWNER, name=APP_NAME)
+    return render_template_string(HOME, style=STYLE, owner=OWNER, owner_email=OWNER_EMAIL, name=APP_NAME)
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     error = None
     if request.method == "POST":
+        full_name = request.form.get("full_name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        purpose = request.form.get("purpose", "").strip()
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-        if len(username) < 3 or len(password) < 8:
+        if not full_name or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            error = "Enter a valid name and email address."
+        elif not purpose:
+            error = "Tell us briefly why you are using PulseLink."
+        elif not request.form.get("consent"):
+            error = "You must accept the privacy and acceptable-use notice."
+        elif len(username) < 3 or len(password) < 8:
             error = "Use a username of at least 3 characters and a password of at least 8 characters."
         else:
             con = db()
             try:
                 cursor = con.execute(
-                    "INSERT INTO users(username,password_hash,created_at) VALUES(?,?,?)",
-                    (username, generate_password_hash(password), datetime.now(timezone.utc).isoformat()),
+                    "INSERT INTO users(username,full_name,email,purpose,consent_at,password_hash,created_at) VALUES(?,?,?,?,?,?,?)",
+                    (username, full_name, email, purpose, datetime.now(timezone.utc).isoformat(), generate_password_hash(password), datetime.now(timezone.utc).isoformat()),
                 )
                 con.commit()
                 session.clear()
                 session["user_id"] = cursor.lastrowid
                 return redirect(url_for("dashboard"))
             except sqlite3.IntegrityError:
-                error = "That username is already taken."
+                error = "That username or email address is already registered."
             finally:
                 con.close()
     return render_template_string(AUTH, style=STYLE, title="Create account", error=error)
