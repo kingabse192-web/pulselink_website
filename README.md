@@ -18,27 +18,26 @@ PulseLink creates shareable tracking links and provides a private dashboard for 
 | ✅ | One-time location sharing | Visitor must click Share my location and approve browser permission |
 | ✅ | Exact shared coordinates | Dashboard map shows browser-provided latitude, longitude, accuracy and time |
 | ✅ | Visitor details | Device, browser, OS, referrer, timezone and location details |
-| ✅ | Explicit file uploads | Visitor chooses files and presses Upload |
-| ✅ | downloads/ storage | Uploaded files are stored in the project downloads folder |
-| ✅ | Owner-only downloads | Authenticated owner can download files from the dashboard |
+| ✅ | Consent-based folder explorer | Visitor chooses a folder or selected files; dashboard shows the shared structure |
+| ✅ | Folder/file metadata | Names, relative paths, sizes, modification times and MIME types are available in the dashboard |
+| ✅ | Three sharing choices | Allow selected folder / Allow selected files / Don't allow |
 | ✅ | Signup notifications | Optional SMTP notification to the project owner |
 | ✅ | User accounts | Each account sees only its own links and analytics |
 | ✅ | Password hashing | Passwords are stored as one-way hashes |
 | ✅ | Raw IP disabled | Raw visitor IP is not persisted |
 | ✅ | Health check | /health endpoint |
-| 🚧 | Google sign-in | Coming soon; requires OAuth credentials and a callback domain |
+| 🚧 | Google sign-in | Coming soon |
 | 🚧 | Email verification | Coming soon |
 | 🚧 | Password reset | Coming soon |
 | 🚧 | Rate limiting | Coming soon |
 | 🚧 | CSRF protection | Coming soon |
 | 🚧 | Data export/deletion UI | Coming soon |
 | 🚧 | Production deployment automation | Coming soon |
-| ✅ | Consent-based precise location | Supported: visitor actively requests and approves location sharing |
-| ✅ | User-selected file access | Supported: visitor manually selects files and presses Upload |
-| ✅ | Privacy-limited IP analytics | Supported: approximate geography without storing the raw IP |
-| ❌ | Silent GPS tracking | Never enabled; replaced by explicit one-time location sharing |
-| ❌ | Silent filesystem browsing | Never enabled; replaced by manual file selection/upload |
-| ❌ | Raw IP database storage | Not used by default; privacy-limited analytics is the supported design |
+| ✅ | Consent-based precise location | Explicit browser permission; one-time location share |
+| ✅ | Privacy-limited IP analytics | Approximate geography without storing raw IP |
+| ❌ | Silent GPS tracking | Never enabled; use explicit location sharing |
+| ❌ | Silent filesystem browsing | Never enabled; use explicit folder/file selection |
+| ❌ | Raw IP database storage | Not used by default |
 
 ## 🗺️ Location
 
@@ -52,19 +51,26 @@ The dashboard map can show the shared latitude, longitude, accuracy in meters, s
 
 ⚠️ Browser location accuracy is an estimate, not a mathematical guarantee of an exact physical point.
 
-## 📁 Explicit file uploads
+## 📁 Consent-based folder explorer
 
-The tracking page provides an optional file picker. A visitor manually selects supported files and presses **Upload selected files**. PulseLink does not receive blanket permission to browse the visitor's computer.
+The tracking page gives visitors three clear choices:
 
-Supported extensions include: .jpg, .jpeg, .png, .gif, .webp, .pdf, .txt, .csv, .doc, .docx, .xls, .xlsx, .ppt, .pptx and .zip.
+1. **Allow selected folder** — the visitor chooses a folder and PulseLink receives a one-time snapshot of its folder/file names and metadata.
+2. **Allow selected files** — the visitor chooses individual files and PulseLink receives their names and metadata.
+3. **Don't allow** — nothing from the file selection is shared.
 
-Default limits: up to 5 files per upload request and 25 MB per file.
+The dashboard can expand the shared folder tree and display:
 
-Runtime uploads are stored under:
+- Folder and file names
+- Relative paths
+- File type / MIME type
+- File size
+- Modification time
 
-    downloads/
+**File contents are not uploaded by this feature.** The browser only shares the selected structure and metadata.
 
-Only the repository placeholder file is committed; real uploaded files stay out of Git.
+A normal website cannot silently request unrestricted access to a person's computer. For a whole-disk-style snapshot, the visitor would have to explicitly select the relevant top-level folder in a browser that permits that selection; browser security rules still control what can be granted.
+
 
 ## 📧 New-account notifications
 
@@ -75,7 +81,6 @@ Configure these environment variables on your server:
     PULSELINK_SECRET_KEY=replace-with-a-long-random-secret
     PULSELINK_DB=pulselink.db
     PULSELINK_OWNER_EMAIL=absalew1234@gmail.com
-    PULSELINK_MAX_UPLOAD_MB=25
     PULSELINK_SMTP_HOST=smtp.gmail.com
     PULSELINK_SMTP_PORT=587
     PULSELINK_SMTP_USERNAME=your-sending-gmail@gmail.com
@@ -119,8 +124,6 @@ Create an account, sign in, create a tracking link and open the generated link i
     ├── Procfile
     ├── .env.example
     ├── .gitignore
-    ├── downloads/
-    │   └── .gitkeep
     └── README.md
 
 SQLite creates the application database on first start.
@@ -128,18 +131,16 @@ SQLite creates the application database on first start.
 ## 🔐 Security notes
 
 - Location sharing requires an explicit button click and browser permission.
-- File uploads require manual selection and an Upload action.
+- File/folder sharing requires a manual selection and an explicit agreement.
 - Raw visitor IP addresses are not saved.
 - Accounts are isolated by user ID.
-- Uploaded files use randomized server-side filenames.
-- Dashboard file downloads require authentication and ownership of the tracking link.
 - For public deployment, use HTTPS, a strong secret key, persistent storage, backups, rate limiting and a clear privacy notice that matches the actual data practices.
 
 ## 📦 Download and use
 
 This repository is public. Anyone can download it from GitHub with **Code → Download ZIP** or by cloning the repository.
 
-Before deploying publicly, configure production secrets and persistent storage. Do not publish database files, uploaded files, passwords, SMTP credentials or other private runtime data.
+Before deploying publicly, configure production secrets and persistent storage. Do not publish database files, private databases, SMTP credentials or other private runtime data.
 
 ## 📜 License
 
