@@ -26,16 +26,19 @@ PulseLink creates shareable tracking links and provides a private dashboard for 
 | ✅ | Password hashing | Passwords are stored as one-way hashes |
 | ✅ | Raw IP disabled | Raw visitor IP is not persisted |
 | ✅ | Health check | /health endpoint |
-| 🚧 | Google sign-in | Coming soon |
+| 🚧 | Google sign-in | Coming soon; requires OAuth credentials and a callback domain |
 | 🚧 | Email verification | Coming soon |
 | 🚧 | Password reset | Coming soon |
 | 🚧 | Rate limiting | Coming soon |
 | 🚧 | CSRF protection | Coming soon |
 | 🚧 | Data export/deletion UI | Coming soon |
 | 🚧 | Production deployment automation | Coming soon |
-| ❌ | Silent GPS tracking | Not supported |
-| ❌ | Silent filesystem browsing | Not supported |
-| ❌ | Raw IP database storage | Not supported |
+| ✅ | Consent-based precise location | Supported: visitor actively requests and approves location sharing |
+| ✅ | User-selected file access | Supported: visitor manually selects files and presses Upload |
+| ✅ | Privacy-limited IP analytics | Supported: approximate geography without storing the raw IP |
+| ❌ | Silent GPS tracking | Never enabled; replaced by explicit one-time location sharing |
+| ❌ | Silent filesystem browsing | Never enabled; replaced by manual file selection/upload |
+| ❌ | Raw IP database storage | Not used by default; privacy-limited analytics is the supported design |
 
 ## 🗺️ Location
 
