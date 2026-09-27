@@ -19,14 +19,22 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Compile check
         run: python -m py_compile app.py
 
-      - name: Health check
+      - name: Automated tests
         env:
-          PULSELINK_DB: ${{ runner.temp }}/pulselink-ci.db
+          PULSELINK_DB: \${{ runner.temp }}/pulselink-ci.db
+          PULSELINK_SHARED_STORAGE: \${{ runner.temp }}/pulselink-shared
+          PULSELINK_SECRET_KEY: ci-only-secret
+        run: pytest -q
+
+      - name: Health smoke check
+        env:
+          PULSELINK_DB: \${{ runner.temp }}/pulselink-health.db
+          PULSELINK_SHARED_STORAGE: \${{ runner.temp }}/pulselink-health-shared
           PULSELINK_SECRET_KEY: ci-only-secret
         run: |
           python -c "import app; client=app.app.test_client(); r=client.get('/health'); assert r.status_code == 200 and r.json['status'] == 'ok'; print('health: ok')"
