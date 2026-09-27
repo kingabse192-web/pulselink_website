@@ -639,8 +639,14 @@ VERIFY_NOTICE = r"""
 <main class="wrap" style="max-width:620px;padding-top:70px"><div class="card" style="text-align:center">
 <div class="badge">EMAIL VERIFICATION</div><h1 style="font-size:42px;letter-spacing:-2px">Check your email</h1>
 <p class="muted">A verification link was requested for <b>{{email}}</b>. It expires after 24 hours.</p>
-<p>{{"Verification email sent." if sent else "The verification email could not be sent. Configure SMTP and request another verification email."}}</p>
-<a class="btn" href="/resend-verification">Resend verification</a> <a class="small" href="/login">Sign in</a>
+{% if sent %}
+<p>✅ Verification email sent. Check your inbox and spam/junk folder.</p>
+<a class="btn" href="/login">Go to sign in</a>
+{% else %}
+<p>⚠️ The email could not be sent right now. You can try again later; your account remains unverified until the email link is completed.</p>
+<a class="btn" href="/resend-verification">Try again</a>
+<a class="small" href="/">Maybe next time</a>
+{% endif %}
 </div></main></body></html>
 """
 
