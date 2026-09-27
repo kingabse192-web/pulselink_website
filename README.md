@@ -1,109 +1,145 @@
-# PulseLink - privacy-first link analytics
+# 🚀 PulseLink
 
-A small Flask starter for:
-- Homepage
-- Analytics dashboard
-- Tracking-link creation
-- HTTP 302 redirects
-- Click counts
-- Device/browser/OS/referrer analytics
-- SQLite storage
-- Username/password accounts with per-user link isolation
-- Consent-based full name, email, and stated purpose at signup
-- Abuse-report contact: `absalew1234@gmail.com`
-- No raw IP address persistence
-- Optional, one-time browser location sharing only after explicit visitor permission
-- Explicit visitor file uploads for approved photos/documents
-- No silent GPS collection
+> Privacy-conscious link analytics built with Flask, SQLite and Leaflet.
 
-## Run locally
+PulseLink creates shareable tracking links and provides a private dashboard for clicks, device, browser, OS, referrer and approximate IP-based geography data.
 
-```bash
-python -m venv .venv
-# Windows:
-.venv\\Scripts\\activate
-# Linux/macOS:
-source .venv/bin/activate
+## ✨ Feature status
 
-pip install -r requirements.txt
-python app.py
-```
+| Status | Feature | Details |
+|---|---|---|
+| ✅ | Tracking links | YouTube, Google, Instagram and other HTTP/HTTPS destinations |
+| ✅ | Dashboard | Private account analytics dashboard |
+| ✅ | Device analytics | Desktop / Mobile / Tablet |
+| ✅ | Browser + OS | Parsed from User-Agent |
+| ✅ | Approximate IP map | Approximate country/region/city/ISP data |
+| ✅ | One-time location sharing | Visitor must click Share my location and approve browser permission |
+| ✅ | Exact shared coordinates | Dashboard map shows browser-provided latitude, longitude, accuracy and time |
+| ✅ | Visitor details | Device, browser, OS, referrer, timezone and location details |
+| ✅ | Explicit file uploads | Visitor chooses files and presses Upload |
+| ✅ | downloads/ storage | Uploaded files are stored in the project downloads folder |
+| ✅ | Owner-only downloads | Authenticated owner can download files from the dashboard |
+| ✅ | Signup notifications | Optional SMTP notification to the project owner |
+| ✅ | User accounts | Each account sees only its own links and analytics |
+| ✅ | Password hashing | Passwords are stored as one-way hashes |
+| ✅ | Raw IP disabled | Raw visitor IP is not persisted |
+| ✅ | Health check | /health endpoint |
+| 🚧 | Google sign-in | Coming soon |
+| 🚧 | Email verification | Coming soon |
+| 🚧 | Password reset | Coming soon |
+| 🚧 | Rate limiting | Coming soon |
+| 🚧 | CSRF protection | Coming soon |
+| 🚧 | Data export/deletion UI | Coming soon |
+| 🚧 | Production deployment automation | Coming soon |
+| ❌ | Silent GPS tracking | Not supported |
+| ❌ | Silent filesystem browsing | Not supported |
+| ❌ | Raw IP database storage | Not supported |
+
+## 🗺️ Location
+
+PulseLink keeps approximate IP location separate from explicitly shared browser location.
+
+**Approximate IP location:** the server may use a visitor's public IP transiently for approximate geography. The raw IP is not stored.
+
+**Explicit browser location:** the visitor must press **Share my location** and approve the browser's native permission prompt. Only one location share is accepted for that click.
+
+The dashboard map can show the shared latitude, longitude, accuracy in meters, sharing timestamp, device, browser and operating system.
+
+⚠️ Browser location accuracy is an estimate, not a mathematical guarantee of an exact physical point.
+
+## 📁 Explicit file uploads
+
+The tracking page provides an optional file picker. A visitor manually selects supported files and presses **Upload selected files**. PulseLink does not receive blanket permission to browse the visitor's computer.
+
+Supported extensions include: .jpg, .jpeg, .png, .gif, .webp, .pdf, .txt, .csv, .doc, .docx, .xls, .xlsx, .ppt, .pptx and .zip.
+
+Default limits: up to 5 files per upload request and 25 MB per file.
+
+Runtime uploads are stored under:
+
+    downloads/
+
+Only the repository placeholder file is committed; real uploaded files stay out of Git.
+
+## 📧 New-account notifications
+
+When SMTP is configured, a new account can notify the project owner at absalew1234@gmail.com with the signup name, email, username, stated purpose and creation time.
+
+Configure these environment variables on your server:
+
+    PULSELINK_SECRET_KEY=replace-with-a-long-random-secret
+    PULSELINK_DB=pulselink.db
+    PULSELINK_OWNER_EMAIL=absalew1234@gmail.com
+    PULSELINK_MAX_UPLOAD_MB=25
+    PULSELINK_SMTP_HOST=smtp.gmail.com
+    PULSELINK_SMTP_PORT=587
+    PULSELINK_SMTP_USERNAME=your-sending-gmail@gmail.com
+    PULSELINK_SMTP_PASSWORD=your-gmail-app-password
+    PULSELINK_SMTP_FROM=your-sending-gmail@gmail.com
+
+Never commit real passwords, app passwords or API secrets to GitHub.
+
+## ⚡ Quick start
+
+### 1. Download
+
+Use GitHub **Code → Download ZIP**, or run:
+
+    git clone https://github.com/kingabse192-web/pulselink_website.git
+    cd pulselink_website
+
+### 2. Windows
+
+    python -m venv .venv
+    .venv\Scripts\activate
+    pip install -r requirements.txt
+    python app.py
+
+### 3. Linux / macOS
+
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install -r requirements.txt
+    python app.py
 
 Open http://127.0.0.1:5000
 
-Create an account at `/signup`. Registration asks for a name, email, intended use, and explicit agreement to the privacy and acceptable-use notice. Passwords are stored as one-way hashes and each account only sees its own links and analytics. Abuse reports can be sent to `absalew1234@gmail.com` for manual review; the app does not automatically accuse or report users.
+Create an account, sign in, create a tracking link and open the generated link in a browser to test the visitor flow.
 
-The app stores the signup details and consent timestamp for account security and abuse review. Publish a complete privacy policy and confirm applicable privacy-law obligations before collecting real user data.
+## 🏗️ Project structure
 
-## Deploy
+    pulselink_website/
+    ├── app.py
+    ├── requirements.txt
+    ├── Procfile
+    ├── .env.example
+    ├── .gitignore
+    ├── downloads/
+    │   └── .gitkeep
+    └── README.md
 
-The included `Procfile` runs Gunicorn. A hosted service needs:
+SQLite creates the application database on first start.
 
-```text
-PULSELINK_SECRET_KEY=<long-random-secret>
-PULSELINK_DB=/var/data/pulselink.db
-```
+## 🔐 Security notes
 
-Use a persistent disk for `PULSELINK_DB`; otherwise SQLite data will be reset when the service is redeployed. For production analytics, also add HTTPS, rate limiting, backups, and a privacy notice.
+- Location sharing requires an explicit button click and browser permission.
+- File uploads require manual selection and an Upload action.
+- Raw visitor IP addresses are not saved.
+- Accounts are isolated by user ID.
+- Uploaded files use randomized server-side filenames.
+- Dashboard file downloads require authentication and ownership of the tracking link.
+- For public deployment, use HTTPS, a strong secret key, persistent storage, backups, rate limiting and a clear privacy notice that matches the actual data practices.
 
-### Signup email notifications
+## 📦 Download and use
 
-When SMTP is configured, every new account creation sends the project owner (`absalew1234@gmail.com`) a notification containing the signup name, email, username, stated purpose, and creation time. Keep SMTP credentials in environment variables; never commit them to the repository:
+This repository is public. Anyone can download it from GitHub with **Code → Download ZIP** or by cloning the repository.
 
-```text
-PULSELINK_SMTP_HOST=smtp.gmail.com
-PULSELINK_SMTP_PORT=587
-PULSELINK_SMTP_USERNAME=<your-sending-gmail-address>
-PULSELINK_SMTP_PASSWORD=<gmail-app-password>
-PULSELINK_SMTP_FROM=<your-sending-gmail-address>
-```
+Before deploying publicly, configure production secrets and persistent storage. Do not publish database files, uploaded files, passwords, SMTP credentials or other private runtime data.
 
-The signup form tells users that their name, email, username, and stated purpose are sent to the project owner for account and security administration.
+## 👤 Project
 
-### Explicit file uploads
+**PulseLink**
 
-The tracking page includes an optional file picker. A visitor must manually select files and press **Upload selected files**; the browser does not grant PulseLink blanket access to the visitor's filesystem. Supported common photo/document/archive extensions are stored under `downloads/`, with randomized server-side filenames. The owner can see uploaded-file metadata in the dashboard and download files only while signed in to the account that owns the tracking link. Uploads are limited to 5 files per request and the configured maximum size (25 MB by default).
+Created by **ABSALEW BELAYNEH**
 
-## How the tracking link works
-
-A visitor opens `/r/<code>`. The server records privacy-limited analytics and then offers an optional one-time browser-location sharing step. The visitor must click **Share my location** and approve the browser's native permission prompt. If they decline, they can continue without sharing. If they approve, PulseLink stores the browser-provided latitude, longitude, accuracy, and timestamp once for that click, then redirects to the destination. The dashboard displays explicitly shared browser locations separately from approximate IP-based location. The feature does not continuously track the visitor.
-
-Google sign-in is not enabled by default because it requires a Google Cloud OAuth client and a verified callback domain. It can be added after the live domain is chosen; local username/password accounts are ready now and do not require entering a Google password.
-
-## Feature readiness
-
-| Feature | Status | Result |
-|---|---|---|
-| Homepage | Ready | Works |
-| Professional signup | Ready | Name, email, purpose, username, password |
-| Consent checkbox | Ready | Required before account creation |
-| Password security | Ready | Passwords are hashed |
-| Separate user accounts | Ready | Users cannot access each other's links |
-| Link creation | Ready | Validates HTTP/HTTPS URLs |
-| Tracking redirect | Ready | Uses HTTP 302 |
-| Analytics | Ready | Browser, device, OS, referrer, approximate location |
-| Raw IP storage | Disabled | Raw IP is not saved |
-| One-time browser location | Ready | Visitor must explicitly click Share my location and approve the browser prompt |
-| Precise location retention | One-time | Latitude, longitude, accuracy, and timestamp are stored for the click; no continuous tracking |
-| Explicit file uploads | Ready | Visitor manually selects supported files; stored under `downloads/` and visible in the owner dashboard |
-| Signup owner email | Ready | Optional SMTP notification sent to `absalew1234@gmail.com` with signup details when configured |
-| Abuse contact | Ready | `absalew1234@gmail.com` |
-| Health check | Ready | `/health` endpoint works |
-| Local smoke test | Passed | `final smoke: ok` |
-| Google sign-in | Not configured | Requires Google OAuth credentials |
-| Live hosting | Not completed | Requires a hosting account and production secrets |
-
-## Upcoming features
-
-| Feature | Status | Planned result |
-|---|---|---|
-| Google sign-in | Planned | Users can authenticate with Google OAuth |
-| Email verification | Planned | Confirm ownership of the signup email address |
-| Password reset | Planned | Secure reset links sent by email |
-| Abuse report dashboard | Planned | Review reports and account activity in one place |
-| Rate limiting | Planned | Reduce automated abuse and login attacks |
-| CSRF protection | Planned | Protect account-changing form submissions |
-| Persistent production database | Planned | Keep accounts and analytics across deployments |
-| Privacy policy page | Planned | Explain data collection, retention, and user rights |
-| Data export and deletion | Planned | Let users download or remove their account data |
-| Automated deployment checks | Planned | Run smoke tests before each production release |
+Project owner / notification email: **absalew1234@gmail.com**
