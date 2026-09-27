@@ -189,6 +189,29 @@ The launcher creates an HTTPS Cloudflare quick tunnel to your local PulseLink se
 
 Browser location sharing also requires a secure HTTPS context in normal deployments.
 
+## ☁️ Deploy PulseLink publicly
+
+### One-click Vercel deployment
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/kingabse192-web/pulselink_website)
+
+Vercel supports Flask applications directly and detects the top-level `app` object in `app.py`. citeturn685174search1
+
+After deployment, Vercel gives the app a public HTTPS URL. Use that URL as `PULSELINK_PUBLIC_BASE_URL` when you need a fixed canonical URL; otherwise PulseLink can derive it from the incoming request.
+
+### Important storage requirement
+
+PulseLink currently uses SQLite and server-side shared-file storage. For a production Vercel deployment, replace those local runtime stores with persistent database/object storage. Vercel Functions are not a durable disk for application data. citeturn685174search0
+
+For a fully persistent production setup, configure:
+
+- A hosted SQL database for users, links, clicks and shared-file metadata.
+- Persistent object storage for shared file contents.
+- `PULSELINK_SECRET_KEY` and the other environment variables.
+- `PULSELINK_PUBLIC_BASE_URL` set to the deployed HTTPS URL if a fixed canonical URL is desired.
+
+The current local/temporary setup remains suitable for development and controlled testing.
+
 ## 📦 Download and use
 
 This repository is public. Anyone can download it from GitHub with **Code → Download ZIP** or by cloning the repository.
