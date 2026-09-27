@@ -26,8 +26,8 @@ PulseLink creates shareable tracking links and provides a private dashboard for 
 | ✅ | Password hashing | Passwords are stored as one-way hashes |
 | ✅ | Raw IP disabled | Raw visitor IP is not persisted |
 | ✅ | Health check | /health endpoint |
-| 🚧 | Google sign-in | Coming soon |
-| 🚧 | Email verification | Coming soon |
+| ✅ | Google sign-in | Optional Google OAuth; requires Google Cloud OAuth credentials |
+| ✅ | Email verification | Verification link required for password-based signup; requires SMTP |
 | 🚧 | Password reset | Coming soon |
 | 🚧 | Rate limiting | Coming soon |
 | 🚧 | CSRF protection | Coming soon |
@@ -51,26 +51,28 @@ The dashboard map can show the shared latitude, longitude, accuracy in meters, s
 
 ⚠️ Browser location accuracy is an estimate, not a mathematical guarantee of an exact physical point.
 
-## 📁 Consent-based folder explorer
+## 📁 Consent-based file access
 
-The tracking page gives visitors three clear choices:
+The visitor page has four explicit choices:
 
-1. **Allow selected folder** — the visitor chooses a folder and PulseLink receives a one-time snapshot of its folder/file names and metadata.
-2. **Allow selected files** — the visitor chooses individual files and PulseLink receives their names and metadata.
-3. **Don't allow** — nothing from the file selection is shared.
+1. **Allow all files & folders** — the visitor explicitly selects one top-level folder. PulseLink can then read and upload the files and subfolders inside that selected folder.
+2. **Allow selected files** — only files selected in the browser file picker are uploaded.
+3. **Allow selected folders** — the selected folder contents are uploaded through the browser directory picker.
+4. **Don't allow** — no file content is uploaded.
 
-The dashboard can expand the shared folder tree and display:
+The dashboard provides a browsable shared tree with:
 
 - Folder and file names
 - Relative paths
 - File type / MIME type
-- File size
-- Modification time
+- File size and modification time
+- Open for browser-viewable files
+- Download for shared files
+- Revoke shared files for a visitor click
 
-**File contents are not uploaded by this feature.** The browser only shares the selected structure and metadata.
+File transfer is always initiated by a visible visitor action. The server stores only content the visitor explicitly selected and uploaded. It cannot silently unlock the visitor's entire computer filesystem.
 
-A normal website cannot silently request unrestricted access to a person's computer. For a whole-disk-style snapshot, the visitor would have to explicitly select the relevant top-level folder in a browser that permits that selection; browser security rules still control what can be granted.
-
+Default upload limits are 50 MB per file, 512 MB total per visitor share, and 5,000 manifest entries. Adjust these with the PULSELINK_MAX_* settings shown below.
 
 ## 📧 New-account notifications
 
@@ -86,6 +88,18 @@ Configure these environment variables on your server:
     PULSELINK_SMTP_USERNAME=your-sending-gmail@gmail.com
     PULSELINK_SMTP_PASSWORD=your-gmail-app-password
     PULSELINK_SMTP_FROM=your-sending-gmail@gmail.com
+
+    # Optional Google OAuth.
+    PULSELINK_GOOGLE_CLIENT_ID=
+    PULSELINK_GOOGLE_CLIENT_SECRET=
+    PULSELINK_GOOGLE_REDIRECT_URI=https://YOUR-DOMAIN/auth/google/callback
+
+    # Explicit visitor file storage and limits.
+    PULSELINK_SHARED_STORAGE=shared_files
+    PULSELINK_MAX_FILE_MB=50
+    PULSELINK_MAX_TOTAL_MB=512
+    PULSELINK_MAX_FILES=5000
+    PULSELINK_MAX_UPLOAD_MB=60
 
 Never commit real passwords, app passwords or API secrets to GitHub.
 
@@ -124,7 +138,9 @@ Create an account, sign in, create a tracking link and open the generated link i
     ├── Procfile
     ├── .env.example
     ├── .gitignore
-    └── README.md
+    ├── README.md
+    ├── requirements-dev.txt
+    └── test_app.py
 
 SQLite creates the application database on first start.
 
