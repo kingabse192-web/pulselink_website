@@ -91,6 +91,36 @@ def test_email_verification_and_login(monkeypatch):
     assert response.status_code == 200
 
 
+def test_maybe_later_continues_without_email_verification(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(pulselink, "send_verification_email", lambda email, username, token: sent.setdefault("token", token) or True)
+    response = client.post(
+        "/signup",
+        data={
+            "full_name": "Later User",
+            "email": "later@example.com",
+            "purpose": "Testing later verification",
+            "username": "lateruser",
+            "password": "correct-horse-123",
+            "consent": "on",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "Maybe later" in body
+    continue_response = client.get("/continue-without-verification", follow_redirects=False)
+    assert continue_response.status_code == 302
+    assert continue_response.headers["Location"].endswith("/dashboard")
+    dashboard = client.get("/dashboard")
+    assert dashboard.status_code == 200
+
+    con = pulselink.db()
+    row = con.execute("SELECT email_verified FROM users WHERE username=?", ("lateruser",)).fetchone()
+    con.close()
+    assert row["email_verified"] == 0
+
+
 def test_google_configuration_guard(monkeypatch):
     monkeypatch.setattr(pulselink, "GOOGLE_CLIENT_ID", "")
     monkeypatch.setattr(pulselink, "GOOGLE_REDIRECT_URI", "")
