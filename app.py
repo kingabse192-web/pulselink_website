@@ -372,6 +372,9 @@ DASHBOARD = r"""
 <section class="card"><h2>02 · Your links</h2><div class="scroll"><table><thead><tr><th>Code</th><th>Destination</th><th>Clicks</th><th>Created</th><th>Action</th></tr></thead><tbody>
 {% for x in links %}<tr><td><code>{{x.code}}</code></td><td>{{x.destination}}</td><td>{{x.clicks}}</td><td>{{x.created_at[:19].replace('T',' ')}}</td><td><button class="small" onclick="showAnalytics('{{x.code}}')">Analytics</button> <button class="small delete" onclick="removeLink('{{x.code}}')">Delete</button></td></tr>
 {% else %}<tr><td colspan="5">No links yet.</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="card"><h2>03 · Uploaded files</h2><p class="notice">Files appear here only when a visitor explicitly chooses them and presses Upload. PulseLink does not browse a visitor's device.</p><div class="scroll"><table><thead><tr><th>File</th><th>Link</th><th>Uploaded</th><th>Device</th><th>Type</th><th>Size</th><th>Action</th></tr></thead><tbody>
+{% for f in uploads %}<tr><td>{{f.original_name}}</td><td><code>{{f.code}}</code></td><td>{{f.created_at[:19].replace('T',' ')}}</td><td>{{f.device}} · {{f.browser}} · {{f.operating_system}}</td><td>{{f.content_type}}</td><td>{% if f.size_bytes >= 1048576 %}{{'%.2f'|format(f.size_bytes/1048576)}} MB{% else %}{{'%.1f'|format(f.size_bytes/1024)}} KB{% endif %}</td><td><a class="small" href="/api/uploads/{{f.id}}/download">Download</a></td></tr>
+{% else %}<tr><td colspan="7">No files have been uploaded.</td></tr>{% endfor %}</tbody></table></div></section>
 <section id="analytics" class="card hidden"></section></main>
 <script>
 const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
@@ -507,8 +510,16 @@ def dashboard():
         WHERE l.user_id=? GROUP BY l.id ORDER BY l.id DESC
     """, (user["id"],)).fetchall()
     total = con.execute("SELECT COUNT(*) FROM clicks c JOIN links l ON l.id=c.link_id WHERE l.user_id=?", (user["id"],)).fetchone()[0]
+    uploads = con.execute("""
+        SELECT u.id, u.original_name, u.content_type, u.size_bytes, u.created_at,
+               l.code, c.device, c.browser, c.operating_system
+        FROM uploads u
+        JOIN links l ON l.id=u.link_id
+        JOIN clicks c ON c.id=u.click_id
+        WHERE l.user_id=? ORDER BY u.id DESC LIMIT 500
+    """, (user["id"],)).fetchall()
     con.close()
-    return render_template_string(DASHBOARD, style=STYLE, owner=OWNER, user=user, links=links, total=total, count=len(links))
+    return render_template_string(DASHBOARD, style=STYLE, owner=OWNER, user=user, links=links, total=total, count=len(links), uploads=uploads)
 
 @app.post("/api/links")
 @login_required
