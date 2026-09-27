@@ -1196,95 +1196,205 @@ def location_share_api(code):
     return jsonify(success=True)
 
 LOCATION_PAGE = r"""
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Location sharing — PulseLink</title><style>{{style}}</style></head><body>
-<main class="wrap" style="max-width:620px;padding-top:70px"><div class="card" style="text-align:center">
-<div class="badge">PULSELINK · OPTIONAL LOCATION SHARING</div>
-<h1 style="font-size:42px;letter-spacing:-2px">Share your location?</h1>
-<p class="muted">You can optionally share your current browser location with the link owner. Your location is sent only after you press <b>Share my location</b> and approve the browser permission prompt.</p>
-<button id="share" class="btn" type="button">Share my location</button>
-<hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0">
-<h2 style="font-size:20px">📁 Optional file access</h2>
-<p class="notice">Choose exactly what you want to share. PulseLink receives only names, paths, sizes, modification times and file types; file contents are not sent.</p>
-<label class="check" style="display:block;margin:14px 0"><input id="fileConsent" type="checkbox"> I agree to share the selected file/folder structure with the link owner.</label>
-<div class="form" style="margin-top:10px;flex-wrap:wrap">
-<button id="folderBtn" class="btn" type="button">Allow selected folder</button>
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PulseLink — Visitor permissions</title><style>{{style}}</style></head><body>
+<main class="wrap" style="max-width:760px;padding-top:55px"><div class="card">
+<div class="badge">PULSELINK · VISITOR CONTROL</div>
+<h1 style="font-size:46px;letter-spacing:-3px">Choose what to share</h1>
+<p class="muted">Nothing is granted silently. Every file option below starts only after you click the button and make the browser selection yourself.</p>
+
+<section class="box">
+<h3>📍 Precise location</h3>
+<p class="notice">Your browser will show its native location permission prompt. PulseLink receives coordinates only after you approve that prompt.</p>
+<button id="locationBtn" class="btn" type="button">Share my location</button>
+<span id="locationState" class="notice"></span>
+</section>
+
+<section class="box" style="margin-top:16px">
+<h3>📁 File & folder access</h3>
+<p class="notice"><b>Allow all files & folders</b> means all files and subfolders inside the one top-level folder you explicitly choose. A normal website cannot silently unlock your entire computer filesystem.</p>
+<div class="form" style="display:flex;gap:10px;flex-wrap:wrap">
+<button id="allBtn" class="btn" type="button">Allow all files & folders</button>
 <button id="filesBtn" class="small" type="button">Allow selected files</button>
+<button id="foldersBtn" class="small" type="button">Allow selected folders</button>
+<button id="denyBtn" class="small delete" type="button">Don't allow</button>
 </div>
 <input id="fileInput" type="file" multiple hidden>
 <input id="folderInput" type="file" webkitdirectory multiple hidden>
-<button id="skip" class="small" type="button" style="display:block;width:100%;margin-top:14px">Don't allow</button>
-<p id="fileStatus" class="notice" style="margin-top:12px"></p>
-<p id="status" class="notice" style="margin-top:16px"></p></div></main>
+<p id="fileState" class="notice" style="margin-top:12px"></p>
+</section>
+
+<section class="box" style="margin-top:16px">
+<h3>Continue</h3>
+<p class="notice">When you are finished, press Continue to open the original destination.</p>
+<button id="continueBtn" class="btn" type="button">Continue to destination</button>
+</section>
+</div></main>
+
 <script>
-const clickId={{click_id|tojson}}, code={{code|tojson}}, destination={{destination|tojson}};
-let done=false; const statusEl=document.getElementById('status');
-function finish(){if(done)return;done=true;window.location.replace(destination)}
-async function share(){
- if(!navigator.geolocation){statusEl.textContent='Location sharing is not supported here. Continuing…';setTimeout(finish,800);return}
- statusEl.textContent='Waiting for your permission…';
- navigator.geolocation.getCurrentPosition(async position=>{
-   try{
-     const response=await fetch('/api/location-share/'+encodeURIComponent(code),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({click_id:clickId,latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy}),keepalive:true});
-     if(!response.ok)throw new Error('upload failed');
-     statusEl.textContent='Location shared. Continuing…';
-   }catch(e){statusEl.textContent='Could not share the location. Continuing…'}
-   setTimeout(finish,250);
- }, error=>{statusEl.textContent=error.code===1?'Location permission was not granted. Continuing…':'Location is unavailable. Continuing…';setTimeout(finish,800)}, {enableHighAccuracy:true,maximumAge:0,timeout:10000});
-}
-document.getElementById('share').addEventListener('click',share);
-document.getElementById('skip').addEventListener('click',finish);
+const clickId={{click_id|tojson}};
+const code={{code|tojson}};
+const shareToken={{share_token|tojson}};
+const destination={{destination|tojson}};
+const maxEntries={{max_entries|tojson}};
+const locationState=document.getElementById('locationState');
+const fileState=document.getElementById('fileState');
+const fileInput=document.getElementById('fileInput');
+const folderInput=document.getElementById('folderInput');
 
-const fileConsent=document.getElementById('fileConsent');
-const fileStatus=document.getElementById('fileStatus');
+function go(){ window.location.replace(destination); }
 
-function selectedFileEntries(files, folderMode){
- const entries=[], seen=new Set();
- for(const file of Array.from(files||[])){
-   const raw=(folderMode ? (file.webkitRelativePath||file.name) : file.name).replaceAll('\\\\','/');
-   const parts=raw.split('/').filter(Boolean);
-   for(let i=1;i<parts.length-1;i++){
-     const path=parts.slice(1,i+1).join('/');
-     if(!seen.has(path)){seen.add(path);entries.push({path,name:parts[i],kind:'folder',size_bytes:0,modified_at:null,mime_type:''});}
-   }
-   const path=folderMode ? parts.slice(1).join('/') : parts[parts.length-1];
-   const name=parts[parts.length-1];
-   if(path && !seen.has(path)){seen.add(path);entries.push({path,name,kind:'file',size_bytes:file.size,modified_at:new Date(file.lastModified).toISOString(),mime_type:file.type||''});}
- }
- return entries;
+document.getElementById('continueBtn').addEventListener('click',go);
+
+document.getElementById('locationBtn').addEventListener('click',function(){
+  if(!navigator.geolocation){locationState.textContent='This browser does not support location sharing.';return;}
+  locationState.textContent='Waiting for browser permission…';
+  navigator.geolocation.getCurrentPosition(async function(pos){
+    try{
+      const r=await fetch('/api/location-share/'+encodeURIComponent(code),{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          click_id:clickId,share_token:shareToken,
+          latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy
+        })
+      });
+      if(!r.ok)throw new Error('share failed');
+      locationState.textContent='✓ Location shared.';
+    }catch(e){locationState.textContent='Could not share the location.';}
+  },function(err){
+    locationState.textContent=err.code===1?'Permission denied.':'Location unavailable.';
+  },{enableHighAccuracy:true,maximumAge:0,timeout:10000});
+});
+
+function listSelection(files, folderMode){
+  const entries=[]; const uploadFiles=[]; const seen=new Set();
+  for(const file of Array.from(files||[])){
+    const raw=folderMode ? (file.webkitRelativePath||file.name) : file.name;
+    const parts=raw.replaceAll('\\\\','/').split('/').filter(Boolean);
+    if(!parts.length)continue;
+    const relative=folderMode ? parts.slice(1) : [parts[parts.length-1]];
+    if(!relative.length)continue;
+    if(folderMode){
+      for(let i=0;i<relative.length-1;i++){
+        const path=relative.slice(0,i+1).join('/');
+        if(!seen.has(path)){
+          seen.add(path);
+          entries.push({path:path,name:relative[i],kind:'folder',size_bytes:0,modified_at:null,mime_type:''});
+        }
+      }
+    }
+    const path=relative.join('/');
+    if(!seen.has(path)){
+      seen.add(path);
+      entries.push({
+        path:path,name:relative[relative.length-1],kind:'file',
+        size_bytes:file.size,modified_at:new Date(file.lastModified).toISOString(),mime_type:file.type||''
+      });
+    }
+    uploadFiles.push({path:path,file:file});
+  }
+  return {entries:entries,uploadFiles:uploadFiles};
 }
 
-async function shareFiles(files, folderMode){
- if(!fileConsent.checked){fileStatus.textContent='Check the agreement first.';return}
- const entries=selectedFileEntries(files,folderMode);
- if(!entries.length){fileStatus.textContent='No files were selected.';return}
- if(entries.length>10000){fileStatus.textContent='Selection is too large. Choose a smaller selection.';return}
- fileStatus.textContent='Sharing selected structure…';
- try{
-   const response=await fetch('/api/folder-share/'+encodeURIComponent(code),{
-     method:'POST',headers:{'Content-Type':'application/json'},
-     body:JSON.stringify({click_id:clickId,root_name:folderMode ? ((files[0].webkitRelativePath||files[0].name).split('/')[0]) : 'Selected files',entries})
-   });
-   const data=await response.json();
-   if(!response.ok)throw new Error(data.error||'Could not share the selection.');
-   fileStatus.textContent='Shared successfully. You can now continue.';
- }catch(e){fileStatus.textContent=e.message||'Could not share the selection.'}
+async function walkDirectory(handle,prefix,entries,uploadFiles){
+  for await(const child of handle.values()){
+    const path=prefix+child.name;
+    if(child.kind==='directory'){
+      entries.push({path:path,name:child.name,kind:'folder',size_bytes:0,modified_at:null,mime_type:''});
+      await walkDirectory(child,path+'/',entries,uploadFiles);
+    }else{
+      const file=await child.getFile();
+      entries.push({
+        path:path,name:child.name,kind:'file',size_bytes:file.size,
+        modified_at:new Date(file.lastModified).toISOString(),mime_type:file.type||''
+      });
+      uploadFiles.push({path:path,file:file});
+    }
+  }
 }
-document.getElementById('folderBtn').addEventListener('click',()=>{
- if(!fileConsent.checked){fileStatus.textContent='Check the agreement first.';return}
- const picker=document.getElementById('folderInput');picker.value='';picker.click();
+
+async function uploadSelection(mode,rootName,selection){
+  if(!selection.entries.length){fileState.textContent='Nothing was selected.';return;}
+  if(selection.entries.length>maxEntries){fileState.textContent='Selection exceeds the allowed entry limit.';return;}
+
+  fileState.textContent='Creating the permission record…';
+  const manifest=await fetch('/api/file-share/'+encodeURIComponent(code)+'/manifest',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      click_id:clickId,share_token:shareToken,mode:mode,
+      root_name:rootName,entries:selection.entries
+    })
+  });
+  const md=await manifest.json();
+  if(!manifest.ok)throw new Error(md.error||'Could not create the file permission.');
+
+  let done=0;
+  for(const item of selection.uploadFiles){
+    const form=new FormData();
+    form.append('click_id',String(clickId));
+    form.append('share_id',String(md.share_id));
+    form.append('share_token',shareToken);
+    form.append('relative_path',item.path);
+    form.append('file',item.file,item.file.name);
+    const r=await fetch('/api/file-share/'+encodeURIComponent(code)+'/upload',{method:'POST',body:form});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'A file upload failed.');
+    done++;
+    fileState.textContent='Uploading files… '+done+'/'+selection.uploadFiles.length;
+  }
+  fileState.textContent='✓ '+done+' file(s) uploaded. The owner can now open or download the permitted files.';
+}
+
+document.getElementById('allBtn').addEventListener('click',async function(){
+  try{
+    if(!window.showDirectoryPicker){
+      fileState.textContent='This browser does not support the modern folder picker. Use Allow selected folders instead.';
+      return;
+    }
+    const handle=await window.showDirectoryPicker({mode:'read'});
+    fileState.textContent='Reading the selected folder…';
+    const entries=[];const uploadFiles=[];
+    await walkDirectory(handle,'',entries,uploadFiles);
+    await uploadSelection('all_files',handle.name,{entries:entries,uploadFiles:uploadFiles});
+  }catch(e){
+    fileState.textContent=e.name==='AbortError'?'Selection cancelled.':(e.message||'Could not share the folder.');
+  }
 });
-document.getElementById('filesBtn').addEventListener('click',()=>{
- if(!fileConsent.checked){fileStatus.textContent='Check the agreement first.';return}
- const picker=document.getElementById('fileInput');picker.value='';picker.click();
+
+document.getElementById('filesBtn').addEventListener('click',function(){
+  fileInput.value='';fileInput.click();
 });
-document.getElementById('folderInput').addEventListener('change',e=>{
- shareFiles(e.target.files,true);
+document.getElementById('foldersBtn').addEventListener('click',function(){
+  folderInput.value='';folderInput.click();
 });
-document.getElementById('fileInput').addEventListener('change',e=>{
- shareFiles(e.target.files,false);
+
+fileInput.addEventListener('change',async function(e){
+  try{
+    await uploadSelection('selected_files','Selected files',listSelection(e.target.files,false));
+  }catch(err){fileState.textContent=err.message||'Could not share selected files.';}
 });
-</script></body></html>
+
+folderInput.addEventListener('change',async function(e){
+  try{
+    const files=Array.from(e.target.files||[]);
+    const root=((files[0]&&files[0].webkitRelativePath)||'').split('/')[0]||'Selected folder';
+    await uploadSelection('selected_folders',root,listSelection(files,true));
+  }catch(err){fileState.textContent=err.message||'Could not share selected folders.';}
+});
+
+document.getElementById('denyBtn').addEventListener('click',async function(){
+  try{
+    const r=await fetch('/api/file-share/'+encodeURIComponent(code)+'/manifest',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({click_id:clickId,share_token:shareToken,mode:'deny',root_name:'',entries:[]})
+    });
+    if(!r.ok)throw new Error('Could not record the choice.');
+    fileState.textContent='✓ File access denied.';
+  }catch(e){fileState.textContent=e.message||'Could not record the choice.';}
+});
+</script>
+</body></html>
 """
 
 @app.get("/r/<code>")
@@ -1293,27 +1403,15 @@ def tracking_get(code):
     if not link:
         return "Tracking link not found.", 404
     click_id, share_token = record_click(link["id"])
-    return render_template_string(LOCATION_PAGE, style=STYLE, click_id=click_id, share_token=share_token,
-                                  code=code, destination=link["destination"], max_entries=MAX_SHARED_ENTRIES)
-
-@app.post("/api/location-share/<code>")
-def location_share_api(code):
-    data=request.get_json(silent=True) or {}
-    try:
-        click_id=int(data.get("click_id")); latitude=float(data.get("latitude")); longitude=float(data.get("longitude"))
-        accuracy=float(data["accuracy"]) if data.get("accuracy") is not None else None
-    except (TypeError,ValueError,KeyError):
-        return jsonify(error="Invalid location data."),400
-    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180): return jsonify(error="Invalid coordinates."),400
-    if accuracy is not None and (accuracy < 0 or accuracy > 100000): return jsonify(error="Invalid accuracy."),400
-    con=db()
-    row=con.execute("SELECT c.id FROM clicks c JOIN links l ON l.id=c.link_id WHERE c.id=? AND l.code=?",(click_id,code)).fetchone()
-    if not row: con.close(); return jsonify(error="Location request not found."),404
-    now=datetime.now(timezone.utc).isoformat()
-    updated=con.execute("UPDATE clicks SET shared_latitude=?, shared_longitude=?, shared_accuracy=?, shared_at=?, location_shared=1 WHERE id=? AND location_shared=0",(latitude,longitude,accuracy,now,click_id)).rowcount
-    con.commit(); con.close()
-    if not updated: return jsonify(error="Location was already shared for this click."),409
-    return jsonify(success=True)
+    return render_template_string(
+        LOCATION_PAGE,
+        style=STYLE,
+        click_id=click_id,
+        share_token=share_token,
+        code=code,
+        destination=link["destination"],
+        max_entries=MAX_SHARED_ENTRIES,
+    )
 
 @app.get("/health")
 def health():
