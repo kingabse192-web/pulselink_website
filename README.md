@@ -67,8 +67,9 @@ The dashboard provides a browsable shared tree with:
 - Relative paths
 - File type / MIME type
 - File size and modification time
-- Open for browser-viewable files
-- Download for shared files
+- **Open** for browser-viewable files
+- **Download** individual shared files
+- **Download available files as ZIP** for the whole shared folder
 - Revoke shared files for a visitor click
 
 File transfer is always initiated by a visible visitor action. The server stores only content the visitor explicitly selected and uploaded. It cannot silently unlock the visitor's entire computer filesystem.
@@ -132,7 +133,7 @@ Use GitHub **Code → Download ZIP**, or run:
     pip install -r requirements.txt
     python start.py
 
-`start.py` checks GitHub for a newer `main` commit first. If this directory is a clean Git clone, it performs a fast-forward update; otherwise it starts the current local code without overwriting your work.
+Both `python app.py` and `python start.py` use the startup update check. If this directory is a clean Git clone and GitHub's `main` is newer, PulseLink fast-forwards to the new version and restarts so the new code is the version actually running.
 
 Open http://127.0.0.1:5000
 
