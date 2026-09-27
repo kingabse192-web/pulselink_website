@@ -501,7 +501,7 @@ DASHBOARD = r"""
 <section class="card"><h2>02 · Your links</h2><div class="scroll"><table><thead><tr><th>Code</th><th>Destination</th><th>Clicks</th><th>Created</th><th>Action</th></tr></thead><tbody>
 {% for x in links %}<tr><td><code>{{x.code}}</code></td><td>{{x.destination}}</td><td>{{x.clicks}}</td><td>{{x.created_at[:19].replace('T',' ')}}</td><td><button class="small" onclick="showAnalytics('{{x.code}}')">Analytics</button> <button class="small delete" onclick="removeLink('{{x.code}}')">Delete</button></td></tr>
 {% else %}<tr><td colspan="5">No links yet.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="card"><h2>03 · Shared folder explorer</h2><p class="notice">Only folder structures and file metadata explicitly shared by visitors are shown. File contents stay on the visitor's device.</p><div id="folder-shares" class="box"><p>No shared folders loaded yet.</p></div></section>
+<section class="card"><h2>03 · Visitor file access</h2><p class="notice">Only files and folders that a visitor explicitly selects and uploads are available here.</p><div id="folder-shares" class="box"><p>No shared folders loaded yet.</p></div></section>
 <section id="analytics" class="card hidden"></section></main>
 <script>
 const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
@@ -539,8 +539,8 @@ function renderFolderExplorer(shares,entries){
    const leaf=node.leaf;
    if(leaf&&leaf.kind==='file'){
     const size=Number(leaf.size_bytes||0);
-    const meta=(size>=1048576?(size/1048576).toFixed(2)+' MB':(size/1024).toFixed(1)+' KB')+' · '+(leaf.mime_type||'file');
-    return '<div style="padding:4px 0">📄 <b>'+esc(label)+'</b><span class="notice"> · '+esc(meta)+'</span></div>';
+    const meta=fmtBytes(size)+' · '+(leaf.mime_type||'file'); const actions=leaf.has_content?'<a class="small" href="/api/shared-files/'+Number(leaf.id)+'/view" target="_blank" rel="noopener">Open</a> <a class="small" href="/api/shared-files/'+Number(leaf.id)+'/download">Download</a>':'<span class="notice">Content not uploaded</span>';
+    return '<div style="padding:5px 0">📄 <b>'+esc(label)+'</b><span class="notice"> · '+esc(meta)+'</span> '+actions+'</div>';
    }
    const inner=Array.from(node.children.entries()).map(function(pair){return renderNode(pair[1],pair[0])}).join('');
    return '<details open style="margin:4px 0"><summary style="cursor:pointer">📁 <b>'+esc(label)+'</b></summary><div style="padding-left:18px">'+inner+'</div></details>';
@@ -560,7 +560,7 @@ async function showAnalytics(code){
 <div class="scroll"><table><thead><tr><th>Shared at</th><th>Latitude</th><th>Longitude</th><th>Accuracy</th></tr></thead><tbody>
 ${rows.filter(x=>x.location_shared).map(x=>'<tr><td>'+time(x.shared_at)+'</td><td>'+Number(x.shared_latitude).toFixed(6)+'</td><td>'+Number(x.shared_longitude).toFixed(6)+'</td><td>'+(x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m'))+'</td></tr>').join('')||'<tr><td colspan="4">No visitor has shared a browser location yet.</td></tr>'}
 </tbody></table></div>
-<h3>07 · Visitor / Device Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Country</th><th>City</th><th>Referrer</th><th>ISP</th><th>Time zone</th><th>Precise location</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.city)}, ${esc(x.region)}</td><td>${esc(x.referrer)}</td><td>${esc(x.isp)}</td><td>${esc(x.timezone)}</td><td>${x.location_shared?'Shared':'Not shared'}</td></tr>`).join('')||'<tr><td colspan="10">No clicks yet.</td></tr>'}</tbody></table></div>
+<h3>07 · Visitor / Device Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Country</th><th>City</th><th>Referrer</th><th>ISP</th><th>Time zone</th><th>Precise location</th><th>File access</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.city)}, ${esc(x.region)}</td><td>${esc(x.referrer)}</td><td>${esc(x.isp)}</td><td>${esc(x.timezone)}</td><td>undefined`).join('')||'<tr><td colspan="11">No clicks yet.</td></tr>'}</tbody></table></div>
  <h3>09 · Shared File Explorer</h3><div id="folderExplorer" class="box"><p>Loading shared folder snapshots…</p></div>
  <h3>10 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>
  ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.region)}</td><td>${esc(x.city)}</td><td>${esc(x.isp)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>
@@ -888,18 +888,21 @@ def analytics_api(code):
         return jsonify(error="Tracking link not found."), 404
     rows = con.execute("""
         SELECT id,created_at,device,browser,operating_system,referrer,country,country_code,
-               region,city,isp,latitude,longitude,timezone,shared_latitude,shared_longitude,shared_accuracy,shared_at,location_shared
+               region,city,isp,latitude,longitude,timezone,shared_latitude,shared_longitude,
+               shared_accuracy,shared_at,location_shared,file_share_mode,file_share_denied_at
         FROM clicks WHERE link_id=? ORDER BY id DESC LIMIT 1000
     """, (link["id"],)).fetchall()
     shares = con.execute("""
-        SELECT id,click_id,root_name,entry_count,shared_at
+        SELECT id,click_id,root_name,entry_count,shared_at,access_mode
         FROM shared_folders WHERE link_id=? ORDER BY id DESC LIMIT 50
     """, (link["id"],)).fetchall()
     entries = con.execute("""
-        SELECT s.id AS shared_folder_id,e.relative_path,e.name,e.kind,e.size_bytes,e.modified_at,e.mime_type
+        SELECT s.id AS shared_folder_id,e.id,e.relative_path,e.name,e.kind,e.size_bytes,
+               e.modified_at,e.mime_type,
+               CASE WHEN e.storage_path IS NOT NULL THEN 1 ELSE 0 END AS has_content
         FROM shared_folder_entries e
         JOIN shared_folders s ON s.id=e.shared_folder_id
-        WHERE s.link_id=? ORDER BY s.id DESC, e.relative_path ASC LIMIT 10000
+        WHERE s.link_id=? ORDER BY s.id DESC,e.relative_path ASC LIMIT 20000
     """, (link["id"],)).fetchall()
     con.close()
     return jsonify(link=dict(link), clicks=[dict(x) for x in rows],
@@ -915,117 +918,281 @@ def delete_api(code):
     if not link:
         con.close()
         return jsonify(error="Tracking link not found."), 404
-    con.execute("""
-        DELETE FROM shared_folder_entries
-        WHERE shared_folder_id IN (
-            SELECT id FROM shared_folders WHERE link_id=?
-        )
-    """, (link["id"],))
+    storage_dirs = [r["storage_dir"] for r in con.execute(
+        "SELECT storage_dir FROM shared_folders WHERE link_id=?", (link["id"],)
+    ).fetchall()]
+    con.execute("DELETE FROM shared_folder_entries WHERE shared_folder_id IN (SELECT id FROM shared_folders WHERE link_id=?)", (link["id"],))
     con.execute("DELETE FROM shared_folders WHERE link_id=?", (link["id"],))
     con.execute("DELETE FROM clicks WHERE link_id=?", (link["id"],))
     con.execute("DELETE FROM links WHERE id=?", (link["id"],))
     con.commit()
     con.close()
+    for path in storage_dirs:
+        cleanup_share_storage(path)
     return jsonify(success=True)
 
-@app.post("/api/folder-share/<code>")
-def folder_share_api(code):
-    data=request.get_json(silent=True) or {}
+ALLOWED_FILE_MODES = {"all_files", "selected_files", "selected_folders", "deny"}
+
+@app.post("/api/file-share/<code>/manifest")
+def file_share_manifest(code):
+    data = request.get_json(silent=True) or {}
     try:
-        click_id=int(data.get("click_id"))
-    except (TypeError,ValueError):
-        return jsonify(error="Invalid file-sharing request."),400
+        click_id = int(data.get("click_id"))
+    except (TypeError, ValueError):
+        return jsonify(error="Invalid file-sharing request."), 400
+    token = str(data.get("share_token", ""))
+    mode = str(data.get("mode", "")).strip()
+    root_name = str(data.get("root_name", "")).strip()
+    raw_entries = data.get("entries")
 
-    root_name=str(data.get("root_name","")).strip()
-    raw_entries=data.get("entries")
-    if not root_name or len(root_name)>255:
-        return jsonify(error="Invalid selection name."),400
-    if not isinstance(raw_entries,list) or not raw_entries:
-        return jsonify(error="No files or folders were selected."),400
-    if len(raw_entries)>10000:
-        return jsonify(error="The selection is too large. Limit is 10,000 entries."),400
-
-    con=db()
-    row=con.execute("""
-        SELECT l.id AS link_id,c.id AS click_id
+    con = db()
+    click = con.execute("""
+        SELECT l.id AS link_id,c.id AS click_id,c.share_token
         FROM links l JOIN clicks c ON c.link_id=l.id
         WHERE l.code=? AND c.id=? AND l.enabled=1
-    """,(code,click_id)).fetchone()
-    if not row:
+    """, (code, click_id)).fetchone()
+    if not click or not token_matches(click["share_token"], token):
         con.close()
-        return jsonify(error="File-sharing request not found."),404
+        return jsonify(error="File-sharing request not found."), 404
+    if mode not in ALLOWED_FILE_MODES:
+        con.close()
+        return jsonify(error="Invalid sharing mode."), 400
 
-    normalized=[]
-    seen=set()
+    old = con.execute("SELECT id,storage_dir FROM shared_folders WHERE click_id=?", (click_id,)).fetchone()
+    if mode == "deny":
+        if old:
+            con.execute("DELETE FROM shared_folder_entries WHERE shared_folder_id=?", (old["id"],))
+            con.execute("DELETE FROM shared_folders WHERE id=?", (old["id"],))
+        now = datetime.now(timezone.utc).isoformat()
+        con.execute("UPDATE clicks SET file_share_mode=?,file_share_denied_at=? WHERE id=?", ("deny", now, click_id))
+        con.commit()
+        con.close()
+        cleanup_share_storage(old["storage_dir"] if old else "")
+        return jsonify(success=True, mode="deny")
+
+    if not root_name or len(root_name) > 255 or not isinstance(raw_entries, list) or not raw_entries:
+        con.close()
+        return jsonify(error="Select at least one file or folder."), 400
+    if len(raw_entries) > MAX_SHARED_ENTRIES:
+        con.close()
+        return jsonify(error=f"Too many entries. Limit is {MAX_SHARED_ENTRIES}."), 400
+
+    normalized = []
+    seen = set()
+    total_bytes = 0
     for item in raw_entries:
-        if not isinstance(item,dict):
-            con.close(); return jsonify(error="Invalid entry."),400
-        path=str(item.get("path","")).replace("\\","/").strip("/")
-        name=str(item.get("name","")).strip()
-        kind=str(item.get("kind","")).strip().lower()
-        if not path or len(path)>1000 or not name or len(name)>255 or kind not in ("file","folder"):
-            con.close(); return jsonify(error="Invalid entry data."),400
-        parts=[p for p in path.split("/") if p]
-        if any(p in (".","..") for p in parts):
-            con.close(); return jsonify(error="Invalid path."),400
-        if path in seen:
-            continue
+        if not isinstance(item, dict):
+            con.close(); return jsonify(error="Invalid entry."), 400
+        try:
+            path_parts = safe_relative_parts(item.get("path"))
+        except ValueError:
+            con.close(); return jsonify(error="Invalid relative path."), 400
+        path = "/".join(path_parts)
+        name = str(item.get("name", "")).strip()
+        kind = str(item.get("kind", "")).strip().lower()
+        if not name or len(name) > 255 or kind not in ("file", "folder") or path in seen:
+            con.close(); return jsonify(error="Invalid entry data."), 400
+        if mode == "selected_files" and kind != "file":
+            con.close(); return jsonify(error="Selected-file mode accepts files only."), 400
         seen.add(path)
         try:
-            size=int(item.get("size_bytes") or 0)
-        except (TypeError,ValueError):
-            con.close(); return jsonify(error="Invalid file size."),400
-        if size<0 or size>10**15:
-            con.close(); return jsonify(error="Invalid file size."),400
-        modified=item.get("modified_at")
-        modified=str(modified)[:100] if modified else None
-        mime=str(item.get("mime_type") or "")[:120]
-        normalized.append((path,name,kind,size,modified,mime))
+            size = int(item.get("size_bytes") or 0)
+        except (TypeError, ValueError):
+            con.close(); return jsonify(error="Invalid file size."), 400
+        if size < 0 or size > MAX_SHARED_FILE_BYTES:
+            con.close(); return jsonify(error="A selected file exceeds the configured per-file size limit."), 400
+        if kind == "file":
+            total_bytes += size
+        modified = str(item.get("modified_at") or "")[:100] or None
+        mime = str(item.get("mime_type") or "")[:120]
+        normalized.append((path, name, kind, size, modified, mime))
 
-    now=datetime.now(timezone.utc).isoformat()
-    try:
-        previous=con.execute("SELECT id FROM shared_folders WHERE click_id=?",(click_id,)).fetchone()
-        if previous:
-            con.execute("DELETE FROM shared_folder_entries WHERE shared_folder_id=?",(previous["id"],))
-            con.execute("DELETE FROM shared_folders WHERE id=?",(previous["id"],))
+    if total_bytes > MAX_SHARED_TOTAL_BYTES:
+        con.close()
+        return jsonify(error="The selected files exceed the configured total size limit."), 400
 
-        cur=con.execute(
-            "INSERT INTO shared_folders(link_id,click_id,root_name,entry_count,shared_at) VALUES(?,?,?,?,?)",
-            (row["link_id"],click_id,root_name,len(normalized),now)
-        )
-        share_id=cur.lastrowid
-        con.executemany(
-            """INSERT INTO shared_folder_entries
-               (shared_folder_id,relative_path,name,kind,size_bytes,modified_at,mime_type)
-               VALUES(?,?,?,?,?,?,?)""",
-            [(share_id,)+item for item in normalized]
-        )
+    if old:
+        con.execute("DELETE FROM shared_folder_entries WHERE shared_folder_id=?", (old["id"],))
+        con.execute("DELETE FROM shared_folders WHERE id=?", (old["id"],))
         con.commit()
-    except sqlite3.Error:
-        con.rollback()
-        con.close()
-        return jsonify(error="Could not save the shared structure."),500
-    con.close()
-    return jsonify(success=True,shared_at=now,entry_count=len(normalized))
+        cleanup_share_storage(old["storage_dir"])
 
-@app.post("/api/folder-share/<code>/revoke")
-def revoke_folder_share(code):
-    data=request.get_json(silent=True) or {}
-    try:
-        click_id=int(data.get("click_id"))
-    except (TypeError,ValueError):
-        return jsonify(error="Invalid request."),400
-    con=db()
-    row=con.execute("""SELECT s.id FROM shared_folders s
-                       JOIN links l ON l.id=s.link_id
-                       WHERE l.code=? AND s.click_id=?""",(code,click_id)).fetchone()
-    if not row:
-        con.close()
-        return jsonify(error="Shared structure not found."),404
-    con.execute("DELETE FROM shared_folder_entries WHERE shared_folder_id=?",(row["id"],))
-    con.execute("DELETE FROM shared_folders WHERE id=?",(row["id"],))
+    now = datetime.now(timezone.utc).isoformat()
+    cur = con.execute(
+        """INSERT INTO shared_folders(
+            link_id,click_id,root_name,entry_count,shared_at,access_mode,storage_dir
+        ) VALUES(?,?,?,?,?,?,?)""",
+        (click["link_id"], click_id, root_name, len(normalized), now, mode, "")
+    )
+    share_id = cur.lastrowid
+    storage_dir = os.path.abspath(os.path.join(
+        SHARED_STORAGE_ROOT, f"{click_id}-{share_id}-{secrets.token_hex(8)}"
+    ))
+    os.makedirs(storage_dir, exist_ok=True)
+    con.execute("UPDATE shared_folders SET storage_dir=? WHERE id=?", (storage_dir, share_id))
+    con.executemany(
+        """INSERT INTO shared_folder_entries(
+            shared_folder_id,relative_path,name,kind,size_bytes,modified_at,mime_type,storage_path
+        ) VALUES(?,?,?,?,?,?,?,NULL)""",
+        [(share_id,) + row for row in normalized]
+    )
+    con.execute("UPDATE clicks SET file_share_mode=?,file_share_denied_at=NULL WHERE id=?", (mode, click_id))
     con.commit()
     con.close()
+    return jsonify(success=True, share_id=share_id, mode=mode, entry_count=len(normalized))
+
+@app.post("/api/file-share/<code>/upload")
+def file_share_upload(code):
+    try:
+        click_id = int(request.form.get("click_id", ""))
+        share_id = int(request.form.get("share_id", ""))
+    except ValueError:
+        return jsonify(error="Invalid upload request."), 400
+    token = str(request.form.get("share_token", ""))
+    relative_path = str(request.form.get("relative_path", "")).strip()
+
+    con = db()
+    click = con.execute("""
+        SELECT l.id AS link_id,c.id AS click_id,c.share_token
+        FROM links l JOIN clicks c ON c.link_id=l.id
+        WHERE l.code=? AND c.id=? AND l.enabled=1
+    """, (code, click_id)).fetchone()
+    if not click or not token_matches(click["share_token"], token):
+        con.close()
+        return jsonify(error="Upload request not found."), 404
+    try:
+        relative_path = "/".join(safe_relative_parts(relative_path))
+    except ValueError:
+        con.close()
+        return jsonify(error="Invalid relative path."), 400
+
+    entry = con.execute("""
+        SELECT e.id,e.name,e.kind,e.size_bytes,e.storage_path,s.storage_dir,s.access_mode
+        FROM shared_folder_entries e JOIN shared_folders s ON s.id=e.shared_folder_id
+        WHERE e.shared_folder_id=? AND e.relative_path=?
+    """, (share_id, relative_path)).fetchone()
+    if not entry or entry["kind"] != "file":
+        con.close()
+        return jsonify(error="Selected file was not declared in the manifest."), 404
+
+    upload = request.files.get("file")
+    if not upload:
+        con.close()
+        return jsonify(error="No file was uploaded."), 400
+    payload = upload.read(MAX_SHARED_FILE_BYTES + 1)
+    if len(payload) > MAX_SHARED_FILE_BYTES:
+        con.close()
+        return jsonify(error="This file exceeds the configured per-file size limit."), 413
+
+    uploaded_total = con.execute(
+        """SELECT COALESCE(SUM(size_bytes),0)
+           FROM shared_folder_entries
+           WHERE shared_folder_id=? AND storage_path IS NOT NULL AND id<>?""",
+        (share_id, entry["id"])
+    ).fetchone()[0]
+    if uploaded_total + len(payload) > MAX_SHARED_TOTAL_BYTES:
+        con.close()
+        return jsonify(error="The shared file set exceeds the configured total size limit."), 413
+
+    storage_dir = os.path.realpath(entry["storage_dir"])
+    allowed_root = os.path.realpath(SHARED_STORAGE_ROOT)
+    if not storage_dir.startswith(allowed_root + os.sep):
+        con.close()
+        return jsonify(error="Invalid storage location."), 500
+    os.makedirs(storage_dir, exist_ok=True)
+    filename = secure_filename(entry["name"])[:180] or f"file-{entry['id']}"
+    storage_path = os.path.abspath(os.path.join(storage_dir, f"{entry['id']}-{filename}"))
+    with open(storage_path, "wb") as handle:
+        handle.write(payload)
+    con.execute(
+        "UPDATE shared_folder_entries SET size_bytes=?,mime_type=COALESCE(NULLIF(?,''),mime_type),storage_path=? WHERE id=?",
+        (len(payload), upload.mimetype or "", storage_path, entry["id"])
+    )
+    con.commit()
+    con.close()
+    return jsonify(success=True, entry_id=entry["id"], bytes=len(payload))
+
+@app.get("/api/shared-files/<int:entry_id>/view")
+@login_required
+def view_shared_file(entry_id):
+    row = owned_shared_entry(entry_id)
+    if not row or row["kind"] != "file":
+        return jsonify(error="Shared file not found."), 404
+    path = resolve_storage_path(row["storage_path"])
+    if not path or not os.path.isfile(path):
+        return jsonify(error="File content is not available."), 404
+    return send_file(path, as_attachment=False, download_name=row["name"], mimetype=row["mime_type"] or None, max_age=0)
+
+@app.get("/api/shared-files/<int:entry_id>/download")
+@login_required
+def download_shared_file(entry_id):
+    row = owned_shared_entry(entry_id)
+    if not row or row["kind"] != "file":
+        return jsonify(error="Shared file not found."), 404
+    path = resolve_storage_path(row["storage_path"])
+    if not path or not os.path.isfile(path):
+        return jsonify(error="File content is not available."), 404
+    return send_file(path, as_attachment=True, download_name=row["name"], mimetype=row["mime_type"] or None, max_age=0)
+
+@app.post("/api/file-share/<code>/revoke")
+@login_required
+def revoke_file_share(code):
+    user = current_user()
+    data = request.get_json(silent=True) or {}
+    try:
+        click_id = int(data.get("click_id"))
+    except (TypeError, ValueError):
+        return jsonify(error="Invalid request."), 400
+    con = db()
+    share = con.execute("""
+        SELECT s.id,s.storage_dir
+        FROM shared_folders s JOIN links l ON l.id=s.link_id
+        WHERE l.code=? AND l.user_id=? AND s.click_id=?
+    """, (code, user["id"], click_id)).fetchone()
+    if not share:
+        con.close()
+        return jsonify(error="Shared files not found."), 404
+    con.execute("DELETE FROM shared_folder_entries WHERE shared_folder_id=?", (share["id"],))
+    con.execute("DELETE FROM shared_folders WHERE id=?", (share["id"],))
+    con.execute("UPDATE clicks SET file_share_mode='revoked' WHERE id=?", (click_id,))
+    con.commit()
+    con.close()
+    cleanup_share_storage(share["storage_dir"])
+    return jsonify(success=True)
+
+@app.post("/api/location-share/<code>")
+def location_share_api(code):
+    data = request.get_json(silent=True) or {}
+    try:
+        click_id = int(data.get("click_id"))
+        latitude = float(data.get("latitude"))
+        longitude = float(data.get("longitude"))
+        accuracy = float(data["accuracy"]) if data.get("accuracy") is not None else None
+    except (TypeError, ValueError, KeyError):
+        return jsonify(error="Invalid location data."), 400
+    token = str(data.get("share_token", ""))
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return jsonify(error="Invalid coordinates."), 400
+    if accuracy is not None and (accuracy < 0 or accuracy > 100000):
+        return jsonify(error="Invalid accuracy."), 400
+    con = db()
+    row = con.execute("""
+        SELECT c.id,c.share_token FROM clicks c JOIN links l ON l.id=c.link_id
+        WHERE c.id=? AND l.code=? AND l.enabled=1
+    """, (click_id, code)).fetchone()
+    if not row or not token_matches(row["share_token"], token):
+        con.close()
+        return jsonify(error="Location request not found."), 404
+    now = datetime.now(timezone.utc).isoformat()
+    updated = con.execute(
+        """UPDATE clicks SET shared_latitude=?,shared_longitude=?,shared_accuracy=?,
+           shared_at=?,location_shared=1 WHERE id=? AND location_shared=0""",
+        (latitude, longitude, accuracy, now, click_id)
+    ).rowcount
+    con.commit()
+    con.close()
+    if not updated:
+        return jsonify(error="Location was already shared for this click."), 409
     return jsonify(success=True)
 
 LOCATION_PAGE = r"""
@@ -1125,8 +1292,9 @@ def tracking_get(code):
     link = get_link(code)
     if not link:
         return "Tracking link not found.", 404
-    click_id = record_click(link["id"])
-    return render_template_string(LOCATION_PAGE, style=STYLE, click_id=click_id, code=code, destination=link["destination"])
+    click_id, share_token = record_click(link["id"])
+    return render_template_string(LOCATION_PAGE, style=STYLE, click_id=click_id, share_token=share_token,
+                                  code=code, destination=link["destination"], max_entries=MAX_SHARED_ENTRIES)
 
 @app.post("/api/location-share/<code>")
 def location_share_api(code):
