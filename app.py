@@ -538,7 +538,7 @@ function renderFolderExplorer(shares,entries,code){
  shares.forEach(function(s){
   const box=document.createElement('div');box.className='box';box.style.marginBottom='12px';
   const labels={all_files:'All files & folders inside the selected top-level folder',selected_files:'Selected files',selected_folders:'Selected folder(s)'};
-  box.innerHTML='<h3>📁 '+esc(s.root_name)+' <span class="notice">· '+esc(labels[s.access_mode]||s.access_mode)+' · '+Number(s.entry_count)+' entries</span></h3><p class="notice">Shared '+time(s.shared_at)+'</p><div class="share-tree" id="share-tree-'+Number(s.id)+'"></div><button class="small delete" onclick="revokeFiles('+Number(s.click_id)+',\''+esc(code)+'\')">Revoke shared files</button>';
+  box.innerHTML='<h3>📁 '+esc(s.root_name)+' <span class="notice">· '+esc(labels[s.access_mode]||s.access_mode)+' · '+Number(s.entry_count)+' entries</span></h3><p class="notice">Shared '+time(s.shared_at)+'</p><p><a class="small" href="/api/shared-folders/'+Number(s.id)+'/download">Download available files as ZIP</a></p><div class="share-tree" id="share-tree-'+Number(s.id)+'"></div><button class="small delete" onclick="revokeFiles('+Number(s.click_id)+',\''+esc(code)+'\')">Revoke shared files</button>';
   host.appendChild(box);
   const target=box.querySelector('.share-tree');
   const related=entries.filter(function(e){return Number(e.shared_folder_id)===Number(s.id)});
