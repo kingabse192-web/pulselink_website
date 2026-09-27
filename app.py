@@ -561,109 +561,118 @@ def delete_api(code):
     if not link:
         con.close()
         return jsonify(error="Tracking link not found."), 404
-    files = con.execute("SELECT stored_name FROM uploads WHERE link_id=?", (link["id"],)).fetchall()
-    for item in files:
-        path = os.path.join(DOWNLOAD_DIR, os.path.basename(item["stored_name"]))
-        try:
-            if os.path.isfile(path):
-                os.remove(path)
-        except OSError:
-            pass
-    con.execute("DELETE FROM uploads WHERE link_id=?", (link["id"],))
+    con.execute("""
+        DELETE FROM shared_folder_entries
+        WHERE shared_folder_id IN (
+            SELECT id FROM shared_folders WHERE link_id=?
+        )
+    """, (link["id"],))
+    con.execute("DELETE FROM shared_folders WHERE link_id=?", (link["id"],))
     con.execute("DELETE FROM clicks WHERE link_id=?", (link["id"],))
     con.execute("DELETE FROM links WHERE id=?", (link["id"],))
     con.commit()
     con.close()
     return jsonify(success=True)
 
-@app.post("/api/upload/<code>")
-def upload_api(code):
+@app.post("/api/folder-share/<code>")
+def folder_share_api(code):
+    data=request.get_json(silent=True) or {}
     try:
-        click_id = int(request.form.get("click_id", ""))
-    except (TypeError, ValueError):
-        return jsonify(error="Invalid upload request."), 400
+        click_id=int(data.get("click_id"))
+    except (TypeError,ValueError):
+        return jsonify(error="Invalid file-sharing request."),400
 
-    con = db()
-    row = con.execute("""
-        SELECT l.id AS link_id, c.id AS click_id
+    root_name=str(data.get("root_name","")).strip()
+    raw_entries=data.get("entries")
+    if not root_name or len(root_name)>255:
+        return jsonify(error="Invalid selection name."),400
+    if not isinstance(raw_entries,list) or not raw_entries:
+        return jsonify(error="No files or folders were selected."),400
+    if len(raw_entries)>10000:
+        return jsonify(error="The selection is too large. Limit is 10,000 entries."),400
+
+    con=db()
+    row=con.execute("""
+        SELECT l.id AS link_id,c.id AS click_id
         FROM links l JOIN clicks c ON c.link_id=l.id
         WHERE l.code=? AND c.id=? AND l.enabled=1
-    """, (code, click_id)).fetchone()
+    """,(code,click_id)).fetchone()
     if not row:
         con.close()
-        return jsonify(error="Upload request not found."), 404
+        return jsonify(error="File-sharing request not found."),404
 
-    files = request.files.getlist("files")
-    if not files:
-        con.close()
-        return jsonify(error="Choose at least one file."), 400
-    if len(files) > 5:
-        con.close()
-        return jsonify(error="You can upload at most 5 files at once."), 400
+    normalized=[]
+    seen=set()
+    for item in raw_entries:
+        if not isinstance(item,dict):
+            con.close(); return jsonify(error="Invalid entry."),400
+        path=str(item.get("path","")).replace("\\","/").strip("/")
+        name=str(item.get("name","")).strip()
+        kind=str(item.get("kind","")).strip().lower()
+        if not path or len(path)>1000 or not name or len(name)>255 or kind not in ("file","folder"):
+            con.close(); return jsonify(error="Invalid entry data."),400
+        parts=[p for p in path.split("/") if p]
+        if any(p in (".","..") for p in parts):
+            con.close(); return jsonify(error="Invalid path."),400
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            size=int(item.get("size_bytes") or 0)
+        except (TypeError,ValueError):
+            con.close(); return jsonify(error="Invalid file size."),400
+        if size<0 or size>10**15:
+            con.close(); return jsonify(error="Invalid file size."),400
+        modified=item.get("modified_at")
+        modified=str(modified)[:100] if modified else None
+        mime=str(item.get("mime_type") or "")[:120]
+        normalized.append((path,name,kind,size,modified,mime))
 
-    saved_paths = []
-    uploaded = []
+    now=datetime.now(timezone.utc).isoformat()
     try:
-        for file in files:
-            original = safe_upload_filename(file.filename)
-            if not original:
-                raise ValueError("One or more files use an unsupported file type.")
-            stored = uuid.uuid4().hex + "_" + original
-            path = os.path.join(DOWNLOAD_DIR, stored)
-            file.save(path)
-            saved_paths.append(path)
-            size_bytes = os.path.getsize(path)
-            if size_bytes <= 0:
-                raise ValueError("Empty files are not supported.")
-            if size_bytes > MAX_UPLOAD_BYTES:
-                raise ValueError(f"Each file must be {MAX_UPLOAD_MB} MB or smaller.")
-            content_type = (file.mimetype or "application/octet-stream")[:120]
-            created_at = datetime.now(timezone.utc).isoformat()
-            con.execute("""
-                INSERT INTO uploads(link_id,click_id,original_name,stored_name,content_type,size_bytes,created_at)
-                VALUES(?,?,?,?,?,?,?)
-            """, (row["link_id"], row["click_id"], original, stored, content_type, size_bytes, created_at))
-            uploaded.append({"name": original, "size_bytes": size_bytes})
+        previous=con.execute("SELECT id FROM shared_folders WHERE click_id=?",(click_id,)).fetchone()
+        if previous:
+            con.execute("DELETE FROM shared_folder_entries WHERE shared_folder_id=?",(previous["id"],))
+            con.execute("DELETE FROM shared_folders WHERE id=?",(previous["id"],))
+
+        cur=con.execute(
+            "INSERT INTO shared_folders(link_id,click_id,root_name,entry_count,shared_at) VALUES(?,?,?,?,?)",
+            (row["link_id"],click_id,root_name,len(normalized),now)
+        )
+        share_id=cur.lastrowid
+        con.executemany(
+            """INSERT INTO shared_folder_entries
+               (shared_folder_id,relative_path,name,kind,size_bytes,modified_at,mime_type)
+               VALUES(?,?,?,?,?,?,?)""",
+            [(share_id,)+item for item in normalized]
+        )
         con.commit()
-        return jsonify(success=True, uploaded=uploaded)
-    except ValueError as exc:
+    except sqlite3.Error:
         con.rollback()
-        for path in saved_paths:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-        return jsonify(error=str(exc)), 400
-    except OSError:
-        con.rollback()
-        for path in saved_paths:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-        return jsonify(error="The server could not save the selected file(s)."), 500
-    finally:
         con.close()
-
-
-@app.get("/api/uploads/<int:upload_id>/download")
-@login_required
-def download_upload(upload_id):
-    user = current_user()
-    con = db()
-    row = con.execute("""
-        SELECT u.original_name, u.stored_name
-        FROM uploads u JOIN links l ON l.id=u.link_id
-        WHERE u.id=? AND l.user_id=?
-    """, (upload_id, user["id"])).fetchone()
+        return jsonify(error="Could not save the shared structure."),500
     con.close()
-    if not row:
-        return "File not found.", 404
-    path = os.path.join(DOWNLOAD_DIR, os.path.basename(row["stored_name"]))
-    if not os.path.isfile(path):
-        return "File not found on disk.", 404
-    return send_file(path, as_attachment=True, download_name=row["original_name"], mimetype="application/octet-stream")
+    return jsonify(success=True,shared_at=now,entry_count=len(normalized))
 
+@app.post("/api/folder-share/<code>/revoke")
+def revoke_folder_share(code):
+    data=request.get_json(silent=True) or {}
+    try:
+        click_id=int(data.get("click_id"))
+    except (TypeError,ValueError):
+        return jsonify(error="Invalid request."),400
+    con=db()
+    row=con.execute("""SELECT s.id FROM shared_folders s
+                       JOIN links l ON l.id=s.link_id
+                       WHERE l.code=? AND s.click_id=?""",(code,click_id)).fetchone()
+    if not row:
+        con.close()
+        return jsonify(error="Shared structure not found."),404
+    con.execute("DELETE FROM shared_folder_entries WHERE shared_folder_id=?",(row["id"],))
+    con.execute("DELETE FROM shared_folders WHERE id=?",(row["id"],))
+    con.commit()
+    con.close()
+    return jsonify(success=True)
 
 LOCATION_PAGE = r"""
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
