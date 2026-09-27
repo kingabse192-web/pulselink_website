@@ -604,7 +604,7 @@ AUTH = r"""
 <main class="wrap" style="max-width:540px"><div class="card"><div class="badge">PULSELINK ACCOUNT</div><h1 style="font-size:42px;letter-spacing:-2px">{{title}}</h1>
 {% if error %}<p style="color:#b91c1c">{{error}}</p>{% endif %}
 {% if mode == 'signup' %}
-<form method="post">
+<form method="post" id="account-form">
 <label>Full name</label><input name="full_name" maxlength="100" required autocomplete="name"><br><br>
 <label>Email address</label><input name="email" type="email" maxlength="254" required autocomplete="email"><br><br>
 <label>Why are you using PulseLink?</label><textarea name="purpose" maxlength="500" required rows="4" placeholder="For example: measuring campaign links"></textarea><br><br>
@@ -614,15 +614,20 @@ AUTH = r"""
 <button class="btn" type="submit">Create account</button>
 </form>
 {% else %}
-<form method="post">
+<form method="post" id="password-login">
 <label>Username</label><input name="username" minlength="3" maxlength="40" required autocomplete="username"><br><br>
 <label>Password</label><input name="password" type="password" minlength="8" required autocomplete="current-password"><br><br>
 <button class="btn" type="submit">Sign in</button>
 </form>
 {% endif %}
 {% if google_enabled %}
-<div style="text-align:center;margin:18px 0;color:#9ca3af">or</div>
+<div style="margin:18px 0 10px;text-align:center;color:#9ca3af">Google sign-in is optional</div>
 <a class="small" style="display:block;text-align:center;text-decoration:none;padding:12px" href="/auth/google">Continue with Google</a>
+{% if mode == 'signup' %}
+<a class="small" style="display:block;text-align:center;text-decoration:none;padding:10px;margin-top:8px" href="#account-form">Skip Google and create the account with email + password</a>
+{% else %}
+<a class="small" style="display:block;text-align:center;text-decoration:none;padding:10px;margin-top:8px" href="#password-login">Skip Google and use username &amp; password</a>
+{% endif %}
 {% endif %}
 {% if mode == 'login' %}
 <p class="muted">Forgot your verification email? <a href="/resend-verification">Resend it</a></p>
@@ -1243,12 +1248,16 @@ LOCATION_PAGE = r"""
 
 <section class="box" style="margin-top:16px">
 <h3>📁 File & folder access</h3>
-<p class="notice"><b>Allow all files & folders</b> means all files and subfolders inside the one top-level folder you explicitly choose. A normal website cannot silently unlock your entire computer filesystem.</p>
+<p class="notice">Choose one of these three permissions. <b>Allow all files &amp; folders</b> means everything inside the one top-level folder you explicitly choose. The browser still requires your direct selection.</p>
 <div class="form" style="display:flex;gap:10px;flex-wrap:wrap">
-<button id="allBtn" class="btn" type="button">Allow all files & folders</button>
-<button id="filesBtn" class="small" type="button">Allow selected files</button>
-<button id="foldersBtn" class="small" type="button">Allow selected folders</button>
-<button id="denyBtn" class="small delete" type="button">Don't allow</button>
+<button id="allBtn" class="btn" type="button">Allow all files &amp; folders</button>
+<button id="selectedBtn" class="small" type="button">Allow selected files (folders)</button>
+<button id="denyBtn" class="small delete" type="button">Don't allow file system</button>
+</div>
+<div id="selectedOptions" class="hidden" style="margin-top:12px;padding:12px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb">
+  <div class="notice" style="margin-bottom:10px">Choose files or choose a folder:</div>
+  <button id="filesBtn" class="small" type="button">Choose files</button>
+  <button id="foldersBtn" class="small" type="button">Choose folder</button>
 </div>
 <input id="fileInput" type="file" multiple hidden>
 <input id="folderInput" type="file" webkitdirectory multiple hidden>
@@ -1378,24 +1387,34 @@ async function uploadSelection(mode,rootName,selection){
 
 document.getElementById('allBtn').addEventListener('click',async function(){
   try{
-    if(!window.showDirectoryPicker){
-      fileState.textContent='This browser does not support the modern folder picker. Use Allow selected folders instead.';
+    if(window.showDirectoryPicker){
+      const handle=await window.showDirectoryPicker({mode:'read'});
+      fileState.textContent='Reading every file and folder inside the selected top-level folder…';
+      const entries=[];const uploadFiles=[];
+      await walkDirectory(handle,'',entries,uploadFiles);
+      await uploadSelection('all_files',handle.name,{entries:entries,uploadFiles:uploadFiles});
       return;
     }
-    const handle=await window.showDirectoryPicker({mode:'read'});
-    fileState.textContent='Reading the selected folder…';
-    const entries=[];const uploadFiles=[];
-    await walkDirectory(handle,'',entries,uploadFiles);
-    await uploadSelection('all_files',handle.name,{entries:entries,uploadFiles:uploadFiles});
+    folderInput.dataset.mode='all_files';
+    fileState.textContent='Your browser uses the folder picker. Choose the top-level folder once to share everything inside it.';
+    folderInput.value='';
+    folderInput.click();
   }catch(e){
     fileState.textContent=e.name==='AbortError'?'Selection cancelled.':(e.message||'Could not share the folder.');
   }
 });
 
+document.getElementById('selectedBtn').addEventListener('click',function(){
+  const panel=document.getElementById('selectedOptions');
+  panel.classList.toggle('hidden');
+});
+
 document.getElementById('filesBtn').addEventListener('click',function(){
+  folderInput.dataset.mode='';
   fileInput.value='';fileInput.click();
 });
 document.getElementById('foldersBtn').addEventListener('click',function(){
+  folderInput.dataset.mode='selected_folders';
   folderInput.value='';folderInput.click();
 });
 
@@ -1408,9 +1427,13 @@ fileInput.addEventListener('change',async function(e){
 folderInput.addEventListener('change',async function(e){
   try{
     const files=Array.from(e.target.files||[]);
+    const mode=folderInput.dataset.mode||'selected_folders';
     const root=((files[0]&&files[0].webkitRelativePath)||'').split('/')[0]||'Selected folder';
-    await uploadSelection('selected_folders',root,listSelection(files,true));
-  }catch(err){fileState.textContent=err.message||'Could not share selected folders.';}
+    await uploadSelection(mode,root,listSelection(files,true));
+  }catch(err){fileState.textContent=err.message||'Could not share selected folder.';}
+  finally{
+    folderInput.dataset.mode='';
+  }
 });
 
 document.getElementById('denyBtn').addEventListener('click',async function(){
