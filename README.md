@@ -12,6 +12,7 @@ A small Flask starter for:
 - Consent-based full name, email, and stated purpose at signup
 - Abuse-report contact: `absalew1234@gmail.com`
 - No raw IP address persistence
+- Optional, one-time browser location sharing only after explicit visitor permission
 - No silent GPS collection
 
 ## Run locally
@@ -46,7 +47,7 @@ Use a persistent disk for `PULSELINK_DB`; otherwise SQLite data will be reset wh
 
 ## How the tracking link works
 
-A visitor opens `/r/<code>`. The server records privacy-limited analytics, increments the click counter, and returns an HTTP 302 redirect to the destination.
+A visitor opens `/r/<code>`. The server records privacy-limited analytics and then offers an optional one-time browser-location sharing step. The visitor must click **Share my location** and approve the browser's native permission prompt. If they decline, they can continue without sharing. If they approve, PulseLink stores the browser-provided latitude, longitude, accuracy, and timestamp once for that click, then redirects to the destination. The dashboard displays explicitly shared browser locations separately from approximate IP-based location. The feature does not continuously track the visitor.
 
 Google sign-in is not enabled by default because it requires a Google Cloud OAuth client and a verified callback domain. It can be added after the live domain is chosen; local username/password accounts are ready now and do not require entering a Google password.
 
@@ -63,6 +64,8 @@ Google sign-in is not enabled by default because it requires a Google Cloud OAut
 | Tracking redirect | Ready | Uses HTTP 302 |
 | Analytics | Ready | Browser, device, OS, referrer, approximate location |
 | Raw IP storage | Disabled | Raw IP is not saved |
+| One-time browser location | Ready | Visitor must explicitly click Share my location and approve the browser prompt |
+| Precise location retention | One-time | Latitude, longitude, accuracy, and timestamp are stored for the click; no continuous tracking |
 | Abuse contact | Ready | `absalew1234@gmail.com` |
 | Health check | Ready | `/health` endpoint works |
 | Local smoke test | Passed | `final smoke: ok` |
