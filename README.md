@@ -20,13 +20,13 @@ PulseLink creates shareable tracking links and provides a private dashboard for 
 | ✅ | Visitor details | Device, browser, OS, referrer, timezone and location details |
 | ✅ | Consent-based folder explorer | Visitor chooses a folder or selected files; dashboard shows the shared structure |
 | ✅ | Folder/file metadata | Names, relative paths, sizes, modification times and MIME types are available in the dashboard |
-| ✅ | Three sharing choices | Allow selected folder / Allow selected files / Don't allow |
+| ✅ | Three sharing choices | Allow all files & folders / Allow selected files (folders) / Don't allow file system |
 | ✅ | Signup notifications | Optional SMTP notification to the project owner |
 | ✅ | User accounts | Each account sees only its own links and analytics |
 | ✅ | Password hashing | Passwords are stored as one-way hashes |
 | ✅ | Raw IP disabled | Raw visitor IP is not persisted |
 | ✅ | Health check | /health endpoint |
-| ✅ | Google sign-in | Optional Google OAuth; requires Google Cloud OAuth credentials |
+| ✅ | Google sign-in | Optional Google OAuth; username/password sign-in can be used instead |
 | ✅ | Email verification | Verification link required for password-based signup; requires SMTP |
 | 🚧 | Password reset | Coming soon |
 | 🚧 | Rate limiting | Coming soon |
@@ -53,12 +53,13 @@ The dashboard map can show the shared latitude, longitude, accuracy in meters, s
 
 ## 📁 Consent-based file access
 
-The visitor page has four explicit choices:
+The visitor page has three explicit choices:
 
-1. **Allow all files & folders** — the visitor explicitly selects one top-level folder. PulseLink can then read and upload the files and subfolders inside that selected folder.
-2. **Allow selected files** — only files selected in the browser file picker are uploaded.
-3. **Allow selected folders** — the selected folder contents are uploaded through the browser directory picker.
-4. **Don't allow** — no file content is uploaded.
+1. **Allow all files & folders** — the visitor explicitly selects one top-level folder. PulseLink can then enumerate and upload every file and subfolder inside that selected folder.
+2. **Allow selected files (folders)** — the visitor can choose individual files or a folder through the browser picker.
+3. **Don't allow file system** — no file content is uploaded.
+
+The first choice does not mean hidden or unrestricted access to the whole computer. Browsers require an explicit user selection; PulseLink only receives files inside the folder the visitor selected.
 
 The dashboard provides a browsable shared tree with:
 
@@ -148,6 +149,7 @@ SQLite creates the application database on first start.
 
 - Location sharing requires an explicit button click and browser permission.
 - File/folder sharing requires a manual selection and an explicit agreement.
+- Google sign-in is optional; users can skip it and use the username/password flow.
 - Raw visitor IP addresses are not saved.
 - Accounts are isolated by user ID.
 - For public deployment, use HTTPS, a strong secret key, persistent storage, backups, rate limiting and a clear privacy notice that matches the actual data practices.

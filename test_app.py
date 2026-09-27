@@ -58,9 +58,8 @@ def get_click_token(code):
     click_id = int(re.search(r"const clickId=([^;]+);", body).group(1))
     share_token = __import__("json").loads(re.search(r"const shareToken=([^;]+);", body).group(1))
     assert "Allow all files & folders" in body
-    assert "Allow selected files" in body
-    assert "Allow selected folders" in body
-    assert "Don't allow" in body
+    assert "Allow selected files (folders)" in body
+    assert "Don't allow file system" in body
     return click_id, share_token
 
 
