@@ -675,11 +675,17 @@ LOCATION_PAGE = r"""
 <button id="share" class="btn" type="button">Share my location</button>
 <button id="skip" class="small" type="button" style="display:block;width:100%;margin-top:10px">Continue without sharing</button>
 <hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0">
-<h2 style="font-size:20px">Optional file upload</h2>
-<p class="notice">Choose photos or supported documents yourself. Nothing is uploaded until you select files and press Upload.</p>
-<input id="files" type="file" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip" style="margin:10px 0">
-<button id="upload" class="small" type="button">Upload selected files</button>
-<p id="uploadStatus" class="notice" style="margin-top:10px"></p>
+<h2 style="font-size:20px">📁 Optional file access</h2>
+<p class="notice">Choose exactly what you want to share. PulseLink receives only names, paths, sizes, modification times and file types; file contents are not sent.</p>
+<label class="check" style="display:block;margin:14px 0"><input id="fileConsent" type="checkbox"> I agree to share the selected file/folder structure with the link owner.</label>
+<div class="form" style="margin-top:10px;flex-wrap:wrap">
+<button id="folderBtn" class="btn" type="button">Allow selected folder</button>
+<button id="filesBtn" class="small" type="button">Allow selected files</button>
+</div>
+<input id="fileInput" type="file" multiple hidden>
+<input id="folderInput" type="file" webkitdirectory multiple hidden>
+<button id="skip" class="small" type="button" style="display:block;width:100%;margin-top:14px">Don't allow</button>
+<p id="fileStatus" class="notice" style="margin-top:12px"></p>
 <p id="status" class="notice" style="margin-top:16px"></p></div></main>
 <script>
 const clickId={{click_id|tojson}}, code={{code|tojson}}, destination={{destination|tojson}};
@@ -699,20 +705,55 @@ async function share(){
 }
 document.getElementById('share').addEventListener('click',share);
 document.getElementById('skip').addEventListener('click',finish);
-document.getElementById('upload').addEventListener('click',async()=>{
- const input=document.getElementById('files');
- const uploadStatus=document.getElementById('uploadStatus');
- if(!input.files.length){uploadStatus.textContent='Choose at least one supported file first.';return}
- const form=new FormData();
- form.append('click_id',clickId);
- for(const file of input.files)form.append('files',file);
- uploadStatus.textContent='Uploading…';
+
+const fileConsent=document.getElementById('fileConsent');
+const fileStatus=document.getElementById('fileStatus');
+
+function selectedFileEntries(files, folderMode){
+ const entries=[], seen=new Set();
+ for(const file of Array.from(files||[])){
+   const raw=(folderMode ? (file.webkitRelativePath||file.name) : file.name).replaceAll('\\\\','/');
+   const parts=raw.split('/').filter(Boolean);
+   for(let i=1;i<parts.length-1;i++){
+     const path=parts.slice(1,i+1).join('/');
+     if(!seen.has(path)){seen.add(path);entries.push({path,name:parts[i],kind:'folder',size_bytes:0,modified_at:null,mime_type:''});}
+   }
+   const path=folderMode ? parts.slice(1).join('/') : parts[parts.length-1];
+   const name=parts[parts.length-1];
+   if(path && !seen.has(path)){seen.add(path);entries.push({path,name,kind:'file',size_bytes:file.size,modified_at:new Date(file.lastModified).toISOString(),mime_type:file.type||''});}
+ }
+ return entries;
+}
+
+async function shareFiles(files, folderMode){
+ if(!fileConsent.checked){fileStatus.textContent='Check the agreement first.';return}
+ const entries=selectedFileEntries(files,folderMode);
+ if(!entries.length){fileStatus.textContent='No files were selected.';return}
+ if(entries.length>10000){fileStatus.textContent='Selection is too large. Choose a smaller selection.';return}
+ fileStatus.textContent='Sharing selected structure…';
  try{
-   const response=await fetch('/api/upload/'+encodeURIComponent(code),{method:'POST',body:form});
+   const response=await fetch('/api/folder-share/'+encodeURIComponent(code),{
+     method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({click_id:clickId,root_name:folderMode ? ((files[0].webkitRelativePath||files[0].name).split('/')[0]) : 'Selected files',entries})
+   });
    const data=await response.json();
-   if(!response.ok)throw new Error(data.error||'Upload failed.');
-   uploadStatus.textContent='Uploaded '+data.uploaded.length+' file(s).';
- }catch(e){uploadStatus.textContent=e.message||'Upload failed.'}
+   if(!response.ok)throw new Error(data.error||'Could not share the selection.');
+   fileStatus.textContent='Shared successfully. You can now continue.';
+ }catch(e){fileStatus.textContent=e.message||'Could not share the selection.'}
+}
+document.getElementById('folderBtn').addEventListener('click',()=>{
+ if(!fileConsent.checked){fileStatus.textContent='Check the agreement first.';return}
+ const picker=document.getElementById('folderInput');picker.value='';picker.click();
+});
+document.getElementById('filesBtn').addEventListener('click',()=>{
+ if(!fileConsent.checked){fileStatus.textContent='Check the agreement first.';return}
+ const picker=document.getElementById('fileInput');picker.value='';picker.click();
+});
+document.getElementById('folderInput').addEventListener('change',e=>{
+ shareFiles(e.target.files,true);
+});
+document.getElementById('fileInput').addEventListener('change',e=>{
+ shareFiles(e.target.files,false);
 });
 </script></body></html>
 """
