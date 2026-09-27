@@ -1126,9 +1126,11 @@ def file_share_upload(code):
 
     entry = con.execute("""
         SELECT e.id,e.name,e.kind,e.size_bytes,e.storage_path,s.storage_dir,s.access_mode
-        FROM shared_folder_entries e JOIN shared_folders s ON s.id=e.shared_folder_id
+        FROM shared_folder_entries e
+        JOIN shared_folders s ON s.id=e.shared_folder_id
         WHERE e.shared_folder_id=? AND e.relative_path=?
-    """, (share_id, relative_path)).fetchone()
+          AND s.click_id=? AND s.link_id=? AND s.access_mode IN ('all_files','selected_files','selected_folders')
+    """, (share_id, relative_path, click_id, click["link_id"])).fetchone()
     if not entry or entry["kind"] != "file":
         con.close()
         return jsonify(error="Selected file was not declared in the manifest."), 404
@@ -1260,7 +1262,7 @@ LOCATION_PAGE = r"""
 <main class="wrap" style="max-width:760px;padding-top:55px"><div class="card">
 <div class="badge">PULSELINK · VISITOR CONTROL</div>
 <h1 style="font-size:46px;letter-spacing:-3px">Choose what to share</h1>
-<p class="muted">Nothing is granted silently. Every file option below starts only after you click the button and make the browser selection yourself.</p>
+<p class="muted">Nothing is granted silently. Every file option starts only after you click the button and choose the files/folder in the browser.</p>
 
 <section class="box">
 <h3>📍 Precise location</h3>
@@ -1271,7 +1273,7 @@ LOCATION_PAGE = r"""
 
 <section class="box" style="margin-top:16px">
 <h3>📁 File & folder access</h3>
-<p class="notice">Choose one of these three permissions. <b>Allow all files & folders</b> means everything inside the one top-level folder you explicitly choose. The browser still requires your direct selection.</p>
+<p class="notice">Choose one of these three permissions. <b>Allow all files & folders</b> means every file and nested folder that the browser can expose inside the one top-level folder you explicitly choose. It does not silently unlock other drives or unrelated folders.</p>
 <div class="form" style="display:flex;gap:10px;flex-wrap:wrap">
 <button id="allBtn" class="btn" type="button">Allow all files & folders</button>
 <button id="selectedBtn" class="small" type="button">Allow selected files (folders)</button>
@@ -1405,7 +1407,7 @@ async function uploadSelection(mode,rootName,selection){
     done++;
     fileState.textContent='Uploading files… '+done+'/'+selection.uploadFiles.length;
   }
-  fileState.textContent='✓ '+done+' file(s) uploaded. The owner can now open or download the permitted files.';
+  fileState.textContent='✓ '+done+' file(s) shared. The owner can now open or download the permitted files from the dashboard.';
 }
 
 document.getElementById('allBtn').addEventListener('click',async function(){
