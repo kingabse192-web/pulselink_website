@@ -163,15 +163,6 @@ def send_owner_signup_notification(full_name, email, purpose, username, created_
         app.logger.warning("Signup notification email failed: %s", exc)
         return False
 
-def safe_upload_filename(filename):
-    cleaned = secure_filename(filename or "")
-    if not cleaned:
-        return None
-    extension = os.path.splitext(cleaned)[1].lower()
-    if extension not in ALLOWED_UPLOAD_EXTENSIONS:
-        return None
-    return cleaned
-
 def make_code(length=8):
     alphabet = string.ascii_letters + string.digits
     con = db()
