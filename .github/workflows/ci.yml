@@ -1,0 +1,32 @@
+name: PulseLink CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile check
+        run: python -m py_compile app.py
+
+      - name: Health check
+        env:
+          PULSELINK_DB: ${{ runner.temp }}/pulselink-ci.db
+          PULSELINK_SECRET_KEY: ci-only-secret
+        run: |
+          python -c "import app; client=app.app.test_client(); r=client.get('/health'); assert r.status_code == 200 and r.json['status'] == 'ok'; print('health: ok')"
