@@ -1,5 +1,7 @@
 # 🚀 PulseLink
 
+[![CI](https://github.com/kingabse192-web/pulselink_website/actions/workflows/ci.yml/badge.svg)](https://github.com/kingabse192-web/pulselink_website/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 > Privacy-conscious link analytics built with Flask, SQLite and Leaflet.
 
 PulseLink creates shareable tracking links and provides a private dashboard for clicks, device, browser, OS, referrer and approximate IP-based geography data.
@@ -135,6 +137,10 @@ SQLite creates the application database on first start.
 This repository is public. Anyone can download it from GitHub with **Code → Download ZIP** or by cloning the repository.
 
 Before deploying publicly, configure production secrets and persistent storage. Do not publish database files, uploaded files, passwords, SMTP credentials or other private runtime data.
+
+## 📜 License
+
+PulseLink is released under the MIT License. See [LICENSE](LICENSE).
 
 ## 👤 Project
 
