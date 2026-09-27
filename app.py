@@ -4,24 +4,38 @@ import secrets
 import string
 import ipaddress
 import re
+import hashlib
+import hmac
+import shutil
 import requests
 import smtplib
 import ssl
 from email.message import EmailMessage
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 from functools import wraps
 from flask import Flask, request, redirect, jsonify, render_template_string, send_file, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 APP_NAME = "PulseLink"
 OWNER = "ABSALEW BELAYNEH"
 OWNER_EMAIL = os.environ.get("PULSELINK_OWNER_EMAIL", "absalew1234@gmail.com")
 DB_PATH = os.environ.get("PULSELINK_DB", "pulselink.db")
 PORT = int(os.environ.get("PORT", "5000"))
+SHARED_STORAGE_ROOT = os.path.abspath(os.environ.get("PULSELINK_SHARED_STORAGE", "shared_files"))
+MAX_SHARED_FILE_BYTES = int(os.environ.get("PULSELINK_MAX_FILE_MB", "50")) * 1024 * 1024
+MAX_SHARED_TOTAL_BYTES = int(os.environ.get("PULSELINK_MAX_TOTAL_MB", "512")) * 1024 * 1024
+MAX_SHARED_ENTRIES = int(os.environ.get("PULSELINK_MAX_FILES", "5000"))
+MAX_SHARED_UPLOAD_BYTES = int(os.environ.get("PULSELINK_MAX_UPLOAD_MB", "60")) * 1024 * 1024
+GOOGLE_CLIENT_ID = os.environ.get("PULSELINK_GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("PULSELINK_GOOGLE_CLIENT_SECRET", "").strip()
+GOOGLE_REDIRECT_URI = os.environ.get("PULSELINK_GOOGLE_REDIRECT_URI", "").strip()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("PULSELINK_SECRET_KEY", "dev-only-change-this-secret")
+app.config["MAX_CONTENT_LENGTH"] = MAX_SHARED_UPLOAD_BYTES
+os.makedirs(SHARED_STORAGE_ROOT, exist_ok=True)
 
 # ---------------- DATABASE ----------------
 
@@ -74,6 +88,9 @@ def init_db():
         shared_accuracy REAL,
         shared_at TEXT,
         location_shared INTEGER NOT NULL DEFAULT 0,
+        share_token TEXT NOT NULL DEFAULT '',
+        file_share_mode TEXT NOT NULL DEFAULT '',
+        file_share_denied_at TEXT,
         FOREIGN KEY(link_id) REFERENCES links(id)
     );
 
@@ -84,6 +101,8 @@ def init_db():
         root_name TEXT NOT NULL,
         entry_count INTEGER NOT NULL DEFAULT 0,
         shared_at TEXT NOT NULL,
+        access_mode TEXT NOT NULL DEFAULT 'selected_folder',
+        storage_dir TEXT NOT NULL DEFAULT '',
         FOREIGN KEY(link_id) REFERENCES links(id),
         FOREIGN KEY(click_id) REFERENCES clicks(id)
     );
@@ -97,6 +116,7 @@ def init_db():
         size_bytes INTEGER NOT NULL DEFAULT 0,
         modified_at TEXT,
         mime_type TEXT NOT NULL DEFAULT '',
+        storage_path TEXT,
         FOREIGN KEY(shared_folder_id) REFERENCES shared_folders(id)
     );
 
@@ -116,9 +136,38 @@ def init_db():
         if name not in user_columns:
             con.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
     click_columns = {row[1] for row in con.execute("PRAGMA table_info(clicks)").fetchall()}
-    for name, definition in (("shared_latitude", "REAL"),("shared_longitude", "REAL"),("shared_accuracy", "REAL"),("shared_at", "TEXT"),("location_shared", "INTEGER NOT NULL DEFAULT 0")):
+    for name, definition in (
+        ("shared_latitude", "REAL"), ("shared_longitude", "REAL"), ("shared_accuracy", "REAL"),
+        ("shared_at", "TEXT"), ("location_shared", "INTEGER NOT NULL DEFAULT 0"),
+        ("share_token", "TEXT NOT NULL DEFAULT ''"), ("file_share_mode", "TEXT NOT NULL DEFAULT ''"),
+        ("file_share_denied_at", "TEXT"),
+    ):
         if name not in click_columns:
             con.execute(f"ALTER TABLE clicks ADD COLUMN {name} {definition}")
+
+    share_columns = {row[1] for row in con.execute("PRAGMA table_info(shared_folders)").fetchall()}
+    for name, definition in (
+        ("access_mode", "TEXT NOT NULL DEFAULT 'selected_folder'"),
+        ("storage_dir", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        if name not in share_columns:
+            con.execute(f"ALTER TABLE shared_folders ADD COLUMN {name} {definition}")
+
+    entry_columns = {row[1] for row in con.execute("PRAGMA table_info(shared_folder_entries)").fetchall()}
+    if "storage_path" not in entry_columns:
+        con.execute("ALTER TABLE shared_folder_entries ADD COLUMN storage_path TEXT")
+
+    user_columns = {row[1] for row in con.execute("PRAGMA table_info(users)").fetchall()}
+    for name, definition in (
+        ("email_verified", "INTEGER NOT NULL DEFAULT 1"),
+        ("email_verification_token_hash", "TEXT"),
+        ("email_verification_expires_at", "TEXT"),
+        ("google_sub", "TEXT"),
+    ):
+        if name not in user_columns:
+            con.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_click_share_token ON clicks(share_token)")
     con.commit()
     con.close()
 
@@ -291,28 +340,112 @@ def geo_lookup(ip):
     except (requests.RequestException, ValueError, TypeError):
         return unknown
 
+def hash_token(value):
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+def token_matches(expected_hash, provided):
+    return bool(expected_hash and provided and hmac.compare_digest(expected_hash, hash_token(provided)))
+
 def record_click(link_id):
     device, browser, os_name = parse_user_agent(request.headers.get("User-Agent", ""))
     referrer = (request.referrer or "Direct")[:250]
     geo = geo_lookup(public_ip())
-
+    share_token = secrets.token_urlsafe(24)
+    now = datetime.now(timezone.utc).isoformat()
     con = db()
     cursor = con.execute("""
         INSERT INTO clicks (
             link_id, created_at, device, browser, operating_system, referrer,
-            country, country_code, region, city, isp, latitude, longitude, timezone
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            country, country_code, region, city, isp, latitude, longitude, timezone,
+            share_token, file_share_mode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        link_id,
-        datetime.now(timezone.utc).isoformat(),
-        device, browser, os_name, referrer,
+        link_id, now, device, browser, os_name, referrer,
         geo["country"], geo["country_code"], geo["region"], geo["city"], geo["isp"],
-        geo["latitude"], geo["longitude"], geo["timezone"],
+        geo["latitude"], geo["longitude"], geo["timezone"], share_token, ""
     ))
     click_id = cursor.lastrowid
     con.commit()
     con.close()
-    return click_id
+    return click_id, share_token
+
+def send_verification_email(email, username, token):
+    smtp_host = os.environ.get("PULSELINK_SMTP_HOST", "").strip()
+    smtp_user = os.environ.get("PULSELINK_SMTP_USERNAME", "").strip()
+    smtp_password = os.environ.get("PULSELINK_SMTP_PASSWORD", "")
+    if not smtp_host or not smtp_user or not smtp_password:
+        app.logger.warning("Verification email skipped: SMTP is not configured.")
+        return False
+    try:
+        smtp_port = int(os.environ.get("PULSELINK_SMTP_PORT", "587"))
+    except ValueError:
+        smtp_port = 587
+    sender = os.environ.get("PULSELINK_SMTP_FROM", smtp_user).strip()
+    verify_url = request.host_url.rstrip("/") + url_for("verify_email", token=token)
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = email
+    message["Subject"] = "Verify your PulseLink email address"
+    message.set_content(
+        "Welcome to PulseLink.\n\n"
+        f"Username: {username}\n\n"
+        f"Verify your email address here:\n{verify_url}\n\n"
+        "This link expires in 24 hours."
+    )
+    try:
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=ssl.create_default_context(), timeout=10) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(message)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+                server.ehlo(); server.starttls(context=ssl.create_default_context()); server.ehlo()
+                server.login(smtp_user, smtp_password)
+                server.send_message(message)
+        return True
+    except (OSError, smtplib.SMTPException) as exc:
+        app.logger.warning("Verification email failed: %s", exc)
+        return False
+
+def cleanup_share_storage(storage_dir):
+    if not storage_dir:
+        return
+    root = os.path.abspath(storage_dir)
+    allowed = os.path.abspath(SHARED_STORAGE_ROOT)
+    if root == allowed or not root.startswith(allowed + os.sep):
+        return
+    shutil.rmtree(root, ignore_errors=True)
+
+def safe_relative_parts(raw_path):
+    raw = str(raw_path or "").replace("\\", "/").strip("/")
+    parts = [p for p in raw.split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        raise ValueError("Invalid relative path.")
+    return [secure_filename(p)[:180] or "unnamed" for p in parts]
+
+def owned_shared_entry(entry_id):
+    user = current_user()
+    if not user:
+        return None
+    con = db()
+    row = con.execute("""
+        SELECT e.*, s.link_id, s.click_id, s.storage_dir, s.access_mode, l.code
+        FROM shared_folder_entries e
+        JOIN shared_folders s ON s.id=e.shared_folder_id
+        JOIN links l ON l.id=s.link_id
+        WHERE e.id=? AND l.user_id=?
+    """, (entry_id, user["id"])).fetchone()
+    con.close()
+    return row
+
+def resolve_storage_path(storage_path):
+    if not storage_path:
+        return None
+    candidate = os.path.realpath(storage_path)
+    allowed = os.path.realpath(SHARED_STORAGE_ROOT)
+    if not candidate.startswith(allowed + os.sep):
+        return None
+    return candidate
 
 # ---------------- STYLES & TEMPLATES ----------------
 
