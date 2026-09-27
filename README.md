@@ -49,19 +49,26 @@ The dashboard map can show the shared latitude, longitude, accuracy in meters, s
 
 ⚠️ Browser location accuracy is an estimate, not a mathematical guarantee of an exact physical point.
 
-## 📁 Explicit file uploads
+## 📁 Consent-based folder explorer
 
-The tracking page provides an optional file picker. A visitor manually selects supported files and presses **Upload selected files**. PulseLink does not receive blanket permission to browse the visitor's computer.
+The tracking page now gives visitors three clear choices:
 
-Supported extensions include: .jpg, .jpeg, .png, .gif, .webp, .pdf, .txt, .csv, .doc, .docx, .xls, .xlsx, .ppt, .pptx and .zip.
+1. **Allow selected folder** — the visitor chooses a folder and PulseLink receives a one-time snapshot of its folder/file names and metadata.
+2. **Allow selected files** — the visitor chooses individual files and PulseLink receives their names and metadata.
+3. **Don't allow** — nothing from the file selection is shared.
 
-Default limits: up to 5 files per upload request and 25 MB per file.
+The dashboard can expand the shared folder tree and display:
 
-Runtime uploads are stored under:
+- Folder and file names
+- Relative paths
+- File type / MIME type
+- File size
+- Modification time
 
-    downloads/
+**File contents are not uploaded by this feature.** The browser only shares the selected structure and metadata.
 
-Only the repository placeholder file is committed; real uploaded files stay out of Git.
+A normal website cannot silently request unrestricted access to a person's computer. For a whole-disk-style snapshot, the visitor would have to explicitly select the relevant top-level folder in a browser that permits that selection; browser security rules still control what can be granted.
+
 
 ## 📧 New-account notifications
 
@@ -72,8 +79,7 @@ Configure these environment variables on your server:
     PULSELINK_SECRET_KEY=replace-with-a-long-random-secret
     PULSELINK_DB=pulselink.db
     PULSELINK_OWNER_EMAIL=absalew1234@gmail.com
-    PULSELINK_MAX_UPLOAD_MB=25
-    PULSELINK_SMTP_HOST=smtp.gmail.com
+        PULSELINK_SMTP_HOST=smtp.gmail.com
     PULSELINK_SMTP_PORT=587
     PULSELINK_SMTP_USERNAME=your-sending-gmail@gmail.com
     PULSELINK_SMTP_PASSWORD=your-gmail-app-password
