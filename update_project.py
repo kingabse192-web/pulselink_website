@@ -79,4 +79,4 @@ def update_project() -> bool:
 
 
 if __name__ == "__main__":
-    update_project()
+    raise SystemExit(10 if update_project() else 0)
