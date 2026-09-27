@@ -501,73 +501,97 @@ DASHBOARD = r"""
 <section class="card"><h2>02 · Your links</h2><div class="scroll"><table><thead><tr><th>Code</th><th>Destination</th><th>Clicks</th><th>Created</th><th>Action</th></tr></thead><tbody>
 {% for x in links %}<tr><td><code>{{x.code}}</code></td><td>{{x.destination}}</td><td>{{x.clicks}}</td><td>{{x.created_at[:19].replace('T',' ')}}</td><td><button class="small" onclick="showAnalytics('{{x.code}}')">Analytics</button> <button class="small delete" onclick="removeLink('{{x.code}}')">Delete</button></td></tr>
 {% else %}<tr><td colspan="5">No links yet.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="card"><h2>03 · Visitor file access</h2><p class="notice">Only files and folders that a visitor explicitly selects and uploads are available here.</p><div id="folder-shares" class="box"><p>No shared folders loaded yet.</p></div></section>
+<section class="card"><h2>03 · Visitor file access</h2><p class="notice">Only files explicitly selected and uploaded through the visitor browser are available. The website cannot silently browse a visitor computer.</p><div id="file-summary" class="box"><p>Open Analytics on a link to inspect shared files.</p></div></section>
 <section id="analytics" class="card hidden"></section></main>
-<script>
-const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
-function countBy(a,k){const o={};for(const x of a){const v=x[k]||'Unknown';o[v]=(o[v]||0)+1}return o}
-function list(o){return Object.entries(o).sort((a,b)=>b[1]-a[1]).map(x=>`<p><b>${esc(x[0])}</b> — ${x[1]}</p>`).join('')||'<p>No data.</p>'}
-function time(v){return esc((v||'').replace('T',' ').slice(0,19))}
 
-document.getElementById('create').addEventListener('submit',async e=>{
+<script>
+const esc=function(s){return String(s==null?'':s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;")};
+const fmtBytes=function(n){n=Number(n||0);if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';if(n<1073741824)return (n/1048576).toFixed(2)+' MB';return (n/1073741824).toFixed(2)+' GB'};
+const time=function(v){return esc((v||'').replace('T',' ').slice(0,19))};
+const countBy=function(a,k){const o={};for(const x of a){const v=x[k]||'Unknown';o[v]=(o[v]||0)+1}return o};
+const list=function(o){return Object.entries(o).sort(function(a,b){return b[1]-a[1]}).map(function(x){return '<p><b>'+esc(x[0])+'</b> — '+x[1]+'</p>'}).join('')||'<p>No data.</p>'};
+
+document.getElementById('create').addEventListener('submit',async function(e){
  e.preventDefault();const result=document.getElementById('result');
- try{const r=await fetch('/api/links',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({destination:document.getElementById('destination').value.trim()})});
- const d=await r.json();result.classList.remove('hidden');
- if(!r.ok){result.textContent=d.error||'Could not create link.';return}
- result.innerHTML=`<b>Tracking link:</b><br><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url)}</a><br><br><button class="small" onclick="copyIt('${esc(d.url)}')">Copy</button>`;
- }catch(err){result.classList.remove('hidden');result.textContent='Server connection error.';}
+ try{
+  const r=await fetch('/api/links',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({destination:document.getElementById('destination').value.trim()})});
+  const d=await r.json();result.classList.remove('hidden');
+  if(!r.ok){result.textContent=d.error||'Could not create link.';return}
+  result.innerHTML='<b>Tracking link:</b><br><a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.url)+'</a><br><br><button class="small" onclick="copyIt(\''+esc(d.url)+'\')">Copy</button>';
+ }catch(err){result.classList.remove('hidden');result.textContent='Server connection error.'}
 });
-function copyIt(u){navigator.clipboard?.writeText(u).then(()=>alert('Copied')).catch(()=>prompt('Copy:',u))}
-function renderFolderExplorer(shares,entries){
+function copyIt(u){navigator.clipboard&&navigator.clipboard.writeText(u).then(function(){alert('Copied')}).catch(function(){prompt('Copy:',u)})}
+
+function renderFolderExplorer(shares,entries,code){
  const host=document.getElementById('folderExplorer');
- if(!shares||!shares.length){host.innerHTML='<p>No visitor has explicitly shared a folder or file selection for this link.</p>';return}
- host.innerHTML=shares.map(function(s){return '<details open style="margin-bottom:12px"><summary style="cursor:pointer"><b>📁 '+esc(s.root_name)+'</b> — '+Number(s.entry_count)+' entries — shared '+time(s.shared_at)+'</summary><div id="share-tree-'+Number(s.id)+'" style="padding:10px 0 0 18px"></div></details>'}).join('');
- for(const share of shares){
-  const target=document.getElementById('share-tree-'+Number(share.id));
-  const related=entries.filter(function(e){return Number(e.shared_folder_id)===Number(share.id)});
+ if(!shares.length){host.innerHTML='<p>No visitor has explicitly shared files or folders for this link.</p>';return}
+ host.innerHTML='';
+ shares.forEach(function(s){
+  const box=document.createElement('div');box.className='box';box.style.marginBottom='12px';
+  const labels={all_files:'All files & folders inside the selected top-level folder',selected_files:'Selected files',selected_folders:'Selected folder(s)'};
+  box.innerHTML='<h3>📁 '+esc(s.root_name)+' <span class="notice">· '+esc(labels[s.access_mode]||s.access_mode)+' · '+Number(s.entry_count)+' entries</span></h3><p class="notice">Shared '+time(s.shared_at)+'</p><div class="share-tree" id="share-tree-'+Number(s.id)+'"></div><button class="small delete" onclick="revokeFiles('+Number(s.click_id)+',\''+esc(code)+'\')">Revoke shared files</button>';
+  host.appendChild(box);
+  const target=box.querySelector('.share-tree');
+  const related=entries.filter(function(e){return Number(e.shared_folder_id)===Number(s.id)});
   const root={children:new Map(),leaf:null};
-  for(const e of related){
-   const parts=String(e.relative_path||e.name).split('/').filter(Boolean);
-   let node=root;
-   parts.forEach(function(part,i){
-    if(!node.children.has(part))node.children.set(part,{children:new Map(),leaf:null});
-    node=node.children.get(part);
-    if(i===parts.length-1)node.leaf=e;
-   });
-  }
+  related.forEach(function(e){
+    const parts=String(e.relative_path||e.name).split('/').filter(Boolean);let node=root;
+    parts.forEach(function(part,i){
+      if(!node.children.has(part))node.children.set(part,{children:new Map(),leaf:null});
+      node=node.children.get(part);if(i===parts.length-1)node.leaf=e;
+    });
+  });
   function renderNode(node,label){
-   const leaf=node.leaf;
-   if(leaf&&leaf.kind==='file'){
-    const size=Number(leaf.size_bytes||0);
-    const meta=fmtBytes(size)+' · '+(leaf.mime_type||'file'); const actions=leaf.has_content?'<a class="small" href="/api/shared-files/'+Number(leaf.id)+'/view" target="_blank" rel="noopener">Open</a> <a class="small" href="/api/shared-files/'+Number(leaf.id)+'/download">Download</a>':'<span class="notice">Content not uploaded</span>';
-    return '<div style="padding:5px 0">📄 <b>'+esc(label)+'</b><span class="notice"> · '+esc(meta)+'</span> '+actions+'</div>';
-   }
-   const inner=Array.from(node.children.entries()).map(function(pair){return renderNode(pair[1],pair[0])}).join('');
-   return '<details open style="margin:4px 0"><summary style="cursor:pointer">📁 <b>'+esc(label)+'</b></summary><div style="padding-left:18px">'+inner+'</div></details>';
+    const leaf=node.leaf;
+    if(leaf&&leaf.kind==='file'){
+      const actions=leaf.has_content
+        ? '<a class="small" href="/api/shared-files/'+Number(leaf.id)+'/view" target="_blank" rel="noopener">Open</a> <a class="small" href="/api/shared-files/'+Number(leaf.id)+'/download">Download</a>'
+        : '<span class="notice">Content not available</span>';
+      return '<div style="padding:5px 0">📄 <b>'+esc(label)+'</b><span class="notice"> · '+esc(leaf.mime_type||'file')+' · '+fmtBytes(leaf.size_bytes)+'</span> '+actions+'</div>';
+    }
+    const inner=Array.from(node.children.entries()).map(function(pair){return renderNode(pair[1],pair[0])}).join('');
+    return '<details open style="margin:4px 0"><summary style="cursor:pointer">📁 <b>'+esc(label)+'</b></summary><div style="padding-left:18px">'+inner+'</div></details>';
   }
   target.innerHTML=Array.from(root.children.entries()).map(function(pair){return renderNode(pair[1],pair[0])}).join('')||'<p>No entries.</p>';
- }
+ });
+}
+
+function renderAnalytics(d,code){
+ const p=document.getElementById('analytics');
+ const rows=d.clicks||[];
+ const mapped=rows.filter(function(x){return x.latitude!==null&&x.longitude!==null});
+ const shared=rows.filter(function(x){return x.location_shared&&x.shared_latitude!==null&&x.shared_longitude!==null});
+ let html='<h2>03 · Analytics — <code>'+esc(code)+'</code></h2><p class="muted">Destination: '+esc(d.link.destination)+'</p>';
+ html+='<div class="grid"><div class="box"><h3>Devices</h3>'+list(countBy(rows,'device'))+'</div><div class="box"><h3>Browsers</h3>'+list(countBy(rows,'browser'))+'</div><div class="box"><h3>OS</h3>'+list(countBy(rows,'operating_system'))+'</div><div class="box"><h3>Countries</h3>'+list(countBy(rows,'country'))+'</div></div>';
+ html+='<div class="grid"><div class="box"><h3>Clicks</h3><p><b>'+rows.length+'</b> recorded</p></div><div class="box"><h3>Shared locations</h3><p><b>'+shared.length+'</b> visitor(s) explicitly shared precise coordinates</p></div><div class="box"><h3>Referrers</h3>'+list(countBy(rows,'referrer'))+'</div><div class="box"><h3>Time zones</h3>'+list(countBy(rows,'timezone'))+'</div></div>';
+ html+='<h3>04 · Location Map</h3><div id="map"></div>';
+ html+='<h3>05 · Shared Browser Locations</h3><p class="notice">Only locations explicitly shared after the browser permission prompt are shown.</p><div class="scroll"><table><thead><tr><th>Shared at</th><th>Latitude</th><th>Longitude</th><th>Accuracy</th></tr></thead><tbody>';
+ const locRows=rows.filter(function(x){return x.location_shared}).map(function(x){return '<tr><td>'+time(x.shared_at)+'</td><td>'+Number(x.shared_latitude).toFixed(6)+'</td><td>'+Number(x.shared_longitude).toFixed(6)+'</td><td>'+(x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m'))+'</td></tr>'}).join('');
+ html+=locRows||'<tr><td colspan="4">No visitor has shared a browser location yet.</td></tr></tbody></table></div>';
+ html+='<h3>06 · Visitor / Device Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Country</th><th>City</th><th>Referrer</th><th>ISP</th><th>Time zone</th><th>Precise location</th><th>File access</th></tr></thead><tbody>';
+ html+=rows.map(function(x){return '<tr><td>'+time(x.created_at)+'</td><td>'+esc(x.device)+'</td><td>'+esc(x.browser)+'</td><td>'+esc(x.operating_system)+'</td><td>'+esc(x.country)+' '+esc(x.country_code)+'</td><td>'+esc(x.city)+', '+esc(x.region)+'</td><td>'+esc(x.referrer)+'</td><td>'+esc(x.isp)+'</td><td>'+esc(x.timezone)+'</td><td>'+ (x.location_shared?'Shared':'Not shared')+'</td><td>'+esc(x.file_share_mode||'Not shared')+'</td></tr>'}).join('');
+ html+=rows.length?'':'<tr><td colspan="11">No clicks yet.</td></tr>';html+='</tbody></table></div>';
+ html+='<h3>07 · Shared File Explorer</h3><div id="folderExplorer" class="box"><p>Loading shared files…</p></div>';
+ html+='<h3>08 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>';
+ html+=rows.map(function(x){return '<tr><td>'+time(x.created_at)+'</td><td>'+esc(x.country)+' '+esc(x.country_code)+'</td><td>'+esc(x.region)+'</td><td>'+esc(x.city)+'</td><td>'+esc(x.isp)+'</td></tr>'}).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>';html+='</tbody></table></div>';
+ p.innerHTML=html;
+ const map=L.map('map').setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap contributors'}).addTo(map);
+ const bounds=[];
+ mapped.forEach(function(x){const point=[Number(x.latitude),Number(x.longitude)];bounds.push(point);L.marker(point).addTo(map).bindPopup('<b>Approximate IP location</b><br>'+esc([x.city,x.region,x.country].filter(Boolean).join(', '))+'<br>'+esc(x.device)+' · '+esc(x.browser)+' · '+esc(x.operating_system)+'<br>'+esc(x.isp)+'<br>'+time(x.created_at))});
+ shared.forEach(function(x){const point=[Number(x.shared_latitude),Number(x.shared_longitude)];bounds.push(point);const marker=L.marker(point).addTo(map);if(Number(x.shared_accuracy)>0)L.circle(point,{radius:Number(x.shared_accuracy)}).addTo(map);marker.bindPopup('<b>Explicitly shared browser location</b><br>'+esc([x.city,x.region,x.country].filter(Boolean).join(', '))+'<br>Lat: '+esc(Number(x.shared_latitude).toFixed(6))+'<br>Lon: '+esc(Number(x.shared_longitude).toFixed(6))+'<br>Accuracy: '+(x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m'))+'<br>Shared: '+time(x.shared_at))});
+ if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:14});
+ renderFolderExplorer(d.folder_shares||[],d.folder_entries||[],code);
+ p.scrollIntoView({behavior:'smooth'});
 }
 async function showAnalytics(code){
  const p=document.getElementById('analytics');p.classList.remove('hidden');p.innerHTML='<h2>Loading…</h2>';
- const r=await fetch('/api/links/'+encodeURIComponent(code));const d=await r.json();if(!r.ok){p.innerHTML='<h2>Error</h2>';return}
- const rows=d.clicks;const mapped=rows.filter(x=>x.latitude!==null&&x.longitude!==null);const shared=rows.filter(x=>x.location_shared&&x.shared_latitude!==null&&x.shared_longitude!==null);
- p.innerHTML=`<h2>03 · Analytics — <code>${esc(code)}</code></h2><p class="muted">Destination: ${esc(d.link.destination)}</p>
- <div class="grid"><div class="box"><h3>Devices</h3>${list(countBy(rows,'device'))}</div><div class="box"><h3>Browsers</h3>${list(countBy(rows,'browser'))}</div><div class="box"><h3>OS</h3>${list(countBy(rows,'operating_system'))}</div><div class="box"><h3>Countries</h3>${list(countBy(rows,'country'))}</div></div><div class="grid"><div class="box"><h3>Clicks</h3><p><b>${rows.length}</b> recorded</p></div><div class="box"><h3>Shared locations</h3><p><b>${shared.length}</b> visitor(s) explicitly shared precise coordinates</p></div><div class="box"><h3>Referrers</h3>${list(countBy(rows,'referrer'))}</div><div class="box"><h3>Time zones</h3>${list(countBy(rows,'timezone'))}</div></div>
- <h3>04 · Location Map</h3><div id="map"></div>
- <h3>05 · Shared Browser Locations</h3>
-<p class="notice">Only locations explicitly shared by a visitor after the browser permission prompt are shown here.</p>
-<div class="scroll"><table><thead><tr><th>Shared at</th><th>Latitude</th><th>Longitude</th><th>Accuracy</th></tr></thead><tbody>
-${rows.filter(x=>x.location_shared).map(x=>'<tr><td>'+time(x.shared_at)+'</td><td>'+Number(x.shared_latitude).toFixed(6)+'</td><td>'+Number(x.shared_longitude).toFixed(6)+'</td><td>'+(x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m'))+'</td></tr>').join('')||'<tr><td colspan="4">No visitor has shared a browser location yet.</td></tr>'}
-</tbody></table></div>
-<h3>07 · Visitor / Device Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Country</th><th>City</th><th>Referrer</th><th>ISP</th><th>Time zone</th><th>Precise location</th><th>File access</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.city)}, ${esc(x.region)}</td><td>${esc(x.referrer)}</td><td>${esc(x.isp)}</td><td>${esc(x.timezone)}</td><td>undefined`).join('')||'<tr><td colspan="11">No clicks yet.</td></tr>'}</tbody></table></div>
- <h3>09 · Shared File Explorer</h3><div id="folderExplorer" class="box"><p>Loading shared folder snapshots…</p></div>
- <h3>10 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>
- ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.region)}</td><td>${esc(x.city)}</td><td>${esc(x.isp)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>
- <h3>06 · Click Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Referrer</th></tr></thead><tbody>
- ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.referrer)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>`;
- const map=L.map('map').setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap contributors'}).addTo(map);
- const bounds=[];for(const x of mapped){const point=[Number(x.latitude),Number(x.longitude)];bounds.push(point);L.marker(point).addTo(map).bindPopup(`<b>Approximate IP location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br>${esc(x.device)} · ${esc(x.browser)} · ${esc(x.operating_system)}<br>${esc(x.isp)}<br>${time(x.created_at)}`)}for(const x of shared){const point=[Number(x.shared_latitude),Number(x.shared_longitude)];bounds.push(point);const marker=L.marker(point).addTo(map);if(Number.isFinite(Number(x.shared_accuracy))&&Number(x.shared_accuracy)>0)L.circle(point,{radius:Number(x.shared_accuracy)}).addTo(map);marker.bindPopup(`<b>Explicitly shared browser location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br><b>Device:</b> ${esc(x.device)}<br><b>Browser:</b> ${esc(x.browser)}<br><b>OS:</b> ${esc(x.operating_system)}<br><b>Latitude:</b> ${esc(Number(x.shared_latitude).toFixed(6))}<br><b>Longitude:</b> ${esc(Number(x.shared_longitude).toFixed(6))}<br><b>Accuracy:</b> ${x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m')}<br><b>Shared:</b> ${time(x.shared_at)}`)}if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:14});renderFolderExplorer(d.folder_shares||[],d.folder_entries||[]);p.scrollIntoView({behavior:'smooth'});
+ try{const r=await fetch('/api/links/'+encodeURIComponent(code));const d=await r.json();if(!r.ok)throw new Error(d.error||'Error');renderAnalytics(d,code)}
+ catch(e){p.innerHTML='<h2>Error loading analytics</h2><p class="notice">'+esc(e.message)+'</p>'}
+}
+async function revokeFiles(clickId,code){
+ if(!confirm('Revoke all files shared for this visitor click?'))return;
+ const r=await fetch('/api/file-share/'+encodeURIComponent(code)+'/revoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({click_id:clickId})});
+ if(!r.ok){alert('Could not revoke shared files.');return}showAnalytics(code);
 }
 async function removeLink(code){if(!confirm('Delete this link and its analytics?'))return;const r=await fetch('/api/links/'+encodeURIComponent(code)+'/delete',{method:'POST'});if(r.ok)location.reload()}
 </script></body></html>
