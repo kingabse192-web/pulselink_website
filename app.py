@@ -423,7 +423,7 @@ AUTH = r"""
 <label>Why are you using PulseLink?</label><textarea name="purpose" maxlength="500" required rows="4" placeholder="For example: measuring campaign links"></textarea><br><br>{% endif %}
 <label>Username</label><input name="username" minlength="3" maxlength="40" required autocomplete="username"><br><br>
 <label>Password</label><input name="password" type="password" minlength="8" required autocomplete="{{'new-password' if title == 'Create account' else 'current-password'}}"><br><br>
-{% if title == 'Create account' %}<label class="check"><input name="consent" type="checkbox" required> I agree to the privacy notice and acceptable-use rules. I understand my account details may be used for security and abuse review.</label><br><br>{% endif %}
+{% if title == 'Create account' %}<label class="check"><input name="consent" type="checkbox" required> I agree to the privacy notice and acceptable-use rules. I understand my name, email, username, and stated purpose are sent to the PulseLink project owner for account and security administration.</label><br><br>{% endif %}
 <button class="btn" type="submit">{{title}}</button></form>
 <p class="muted">{% if title == 'Sign in' %}New here? <a href="/signup">Create an account</a>{% else %}Already registered? <a href="/login">Sign in</a>{% endif %}</p></div></main></body></html>
 """
@@ -465,6 +465,8 @@ def signup():
                     (username, full_name, email, purpose, datetime.now(timezone.utc).isoformat(), generate_password_hash(password), datetime.now(timezone.utc).isoformat()),
                 )
                 con.commit()
+                created_at = datetime.now(timezone.utc).isoformat()
+                send_owner_signup_notification(full_name, email, purpose, username, created_at)
                 session.clear()
                 session["user_id"] = cursor.lastrowid
                 return redirect(url_for("dashboard"))
