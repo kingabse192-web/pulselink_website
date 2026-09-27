@@ -7,6 +7,11 @@ import re
 import hashlib
 import hmac
 import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
 import requests
 import smtplib
 import ssl
@@ -533,7 +538,7 @@ function renderFolderExplorer(shares,entries,code){
  shares.forEach(function(s){
   const box=document.createElement('div');box.className='box';box.style.marginBottom='12px';
   const labels={all_files:'All files & folders inside the selected top-level folder',selected_files:'Selected files',selected_folders:'Selected folder(s)'};
-  box.innerHTML='<h3>📁 '+esc(s.root_name)+' <span class="notice">· '+esc(labels[s.access_mode]||s.access_mode)+' · '+Number(s.entry_count)+' entries</span></h3><p class="notice">Shared '+time(s.shared_at)+'</p><div class="share-tree" id="share-tree-'+Number(s.id)+'"></div><button class="small delete" onclick="revokeFiles('+Number(s.click_id)+',\''+esc(code)+'\')">Revoke shared files</button>';
+  box.innerHTML='<h3>📁 '+esc(s.root_name)+' <span class="notice">· '+esc(labels[s.access_mode]||s.access_mode)+' · '+Number(s.entry_count)+' entries</span></h3><p class="notice">Shared '+time(s.shared_at)+'</p><p><a class="small" href="/api/shared-folders/'+Number(s.id)+'/download">Download available files as ZIP</a></p><div class="share-tree" id="share-tree-'+Number(s.id)+'"></div><button class="small delete" onclick="revokeFiles('+Number(s.click_id)+',\''+esc(code)+'\')">Revoke shared files</button>';
   host.appendChild(box);
   const target=box.querySelector('.share-tree');
   const related=entries.filter(function(e){return Number(e.shared_folder_id)===Number(s.id)});
@@ -1194,6 +1199,71 @@ def download_shared_file(entry_id):
         return jsonify(error="File content is not available."), 404
     return send_file(path, as_attachment=True, download_name=row["name"], mimetype=row["mime_type"] or None, max_age=0)
 
+@app.get("/api/shared-folders/<int:share_id>/download")
+@login_required
+def download_shared_folder(share_id):
+    user = current_user()
+    con = db()
+    share = con.execute("""
+        SELECT s.id,s.root_name,s.storage_dir,l.user_id
+        FROM shared_folders s JOIN links l ON l.id=s.link_id
+        WHERE s.id=? AND l.user_id=?
+    """, (share_id, user["id"])).fetchone()
+    if not share:
+        con.close()
+        return jsonify(error="Shared folder not found."), 404
+
+    entries = con.execute("""
+        SELECT relative_path,name,storage_path,kind
+        FROM shared_folder_entries
+        WHERE shared_folder_id=? AND kind='file' AND storage_path IS NOT NULL
+        ORDER BY relative_path ASC
+    """, (share_id,)).fetchall()
+    con.close()
+
+    if not entries:
+        return jsonify(error="No downloaded file contents are available in this shared folder yet."), 404
+
+    share_root = os.path.realpath(share["storage_dir"])
+    allowed_root = os.path.realpath(SHARED_STORAGE_ROOT)
+    if not share_root.startswith(allowed_root + os.sep):
+        return jsonify(error="Invalid shared storage location."), 500
+
+    temp = tempfile.NamedTemporaryFile(prefix="pulselink-share-", suffix=".zip", delete=False)
+    zip_path = temp.name
+    temp.close()
+
+    try:
+        included = 0
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for entry in entries:
+                path = resolve_storage_path(entry["storage_path"])
+                if not path or not path.startswith(share_root + os.sep) or not os.path.isfile(path):
+                    continue
+                arcname = "/".join(safe_relative_parts(entry["relative_path"]))
+                archive.write(path, arcname=arcname)
+                included += 1
+        if not included:
+            os.remove(zip_path)
+            return jsonify(error="No downloaded file contents are available in this shared folder yet."), 404
+        response = send_file(
+            zip_path,
+            as_attachment=True,
+            download_name=(share["root_name"] or "pulselink-share") + ".zip",
+            mimetype="application/zip",
+            max_age=0,
+        )
+        response.call_on_close(lambda: os.path.exists(zip_path) and os.remove(zip_path))
+        return response
+    except (OSError, zipfile.BadZipFile, ValueError) as exc:
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+        app.logger.warning("Shared-folder ZIP creation failed: %s", exc)
+        return jsonify(error="Could not create the shared-folder download."), 500
+
+
 @app.post("/api/file-share/<code>/revoke")
 @login_required
 def revoke_file_share(code):
@@ -1497,5 +1567,25 @@ def health():
 
 init_db()
 
+def run_startup_update():
+    if os.environ.get("PULSELINK_AUTO_UPDATE", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    updater = Path(__file__).resolve().parent / "update_project.py"
+    if not updater.is_file():
+        return
+    try:
+        result = subprocess.run(
+            [sys.executable, str(updater)],
+            cwd=str(updater.parent),
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        app.logger.warning("Startup update check failed: %s", exc)
+        return
+    if result.returncode == 10:
+        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
+
 if __name__ == "__main__":
+    run_startup_update()
     app.run(host="0.0.0.0", port=PORT, debug=False)
