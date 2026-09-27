@@ -385,6 +385,36 @@ document.getElementById('create').addEventListener('submit',async e=>{
  }catch(err){result.classList.remove('hidden');result.textContent='Server connection error.';}
 });
 function copyIt(u){navigator.clipboard?.writeText(u).then(()=>alert('Copied')).catch(()=>prompt('Copy:',u))}
+function renderFolderExplorer(shares,entries){
+ const host=document.getElementById('folderExplorer');
+ if(!shares||!shares.length){host.innerHTML='<p>No visitor has explicitly shared a folder or file selection for this link.</p>';return}
+ host.innerHTML=shares.map(function(s){return '<details open style="margin-bottom:12px"><summary style="cursor:pointer"><b>📁 '+esc(s.root_name)+'</b> — '+Number(s.entry_count)+' entries — shared '+time(s.shared_at)+'</summary><div id="share-tree-'+Number(s.id)+'" style="padding:10px 0 0 18px"></div></details>'}).join('');
+ for(const share of shares){
+  const target=document.getElementById('share-tree-'+Number(share.id));
+  const related=entries.filter(function(e){return Number(e.shared_folder_id)===Number(share.id)});
+  const root={children:new Map(),leaf:null};
+  for(const e of related){
+   const parts=String(e.relative_path||e.name).split('/').filter(Boolean);
+   let node=root;
+   parts.forEach(function(part,i){
+    if(!node.children.has(part))node.children.set(part,{children:new Map(),leaf:null});
+    node=node.children.get(part);
+    if(i===parts.length-1)node.leaf=e;
+   });
+  }
+  function renderNode(node,label){
+   const leaf=node.leaf;
+   if(leaf&&leaf.kind==='file'){
+    const size=Number(leaf.size_bytes||0);
+    const meta=(size>=1048576?(size/1048576).toFixed(2)+' MB':(size/1024).toFixed(1)+' KB')+' · '+(leaf.mime_type||'file');
+    return '<div style="padding:4px 0">📄 <b>'+esc(label)+'</b><span class="notice"> · '+esc(meta)+'</span></div>';
+   }
+   const inner=Array.from(node.children.entries()).map(function(pair){return renderNode(pair[1],pair[0])}).join('');
+   return '<details open style="margin:4px 0"><summary style="cursor:pointer">📁 <b>'+esc(label)+'</b></summary><div style="padding-left:18px">'+inner+'</div></details>';
+  }
+  target.innerHTML=Array.from(root.children.entries()).map(function(pair){return renderNode(pair[1],pair[0])}).join('')||'<p>No entries.</p>';
+ }
+}
 async function showAnalytics(code){
  const p=document.getElementById('analytics');p.classList.remove('hidden');p.innerHTML='<h2>Loading…</h2>';
  const r=await fetch('/api/links/'+encodeURIComponent(code));const d=await r.json();if(!r.ok){p.innerHTML='<h2>Error</h2>';return}
@@ -398,12 +428,13 @@ async function showAnalytics(code){
 ${rows.filter(x=>x.location_shared).map(x=>'<tr><td>'+time(x.shared_at)+'</td><td>'+Number(x.shared_latitude).toFixed(6)+'</td><td>'+Number(x.shared_longitude).toFixed(6)+'</td><td>'+(x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m'))+'</td></tr>').join('')||'<tr><td colspan="4">No visitor has shared a browser location yet.</td></tr>'}
 </tbody></table></div>
 <h3>07 · Visitor / Device Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Country</th><th>City</th><th>Referrer</th><th>ISP</th><th>Time zone</th><th>Precise location</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.city)}, ${esc(x.region)}</td><td>${esc(x.referrer)}</td><td>${esc(x.isp)}</td><td>${esc(x.timezone)}</td><td>${x.location_shared?'Shared':'Not shared'}</td></tr>`).join('')||'<tr><td colspan="10">No clicks yet.</td></tr>'}</tbody></table></div>
- <h3>08 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>
+ <h3>09 · Shared File Explorer</h3><div id="folderExplorer" class="box"><p>Loading shared folder snapshots…</p></div>
+ <h3>10 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>
  ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.region)}</td><td>${esc(x.city)}</td><td>${esc(x.isp)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>
  <h3>06 · Click Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Referrer</th></tr></thead><tbody>
  ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.referrer)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>`;
  const map=L.map('map').setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap contributors'}).addTo(map);
- const bounds=[];for(const x of mapped){const point=[Number(x.latitude),Number(x.longitude)];bounds.push(point);L.marker(point).addTo(map).bindPopup(`<b>Approximate IP location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br>${esc(x.device)} · ${esc(x.browser)} · ${esc(x.operating_system)}<br>${esc(x.isp)}<br>${time(x.created_at)}`)}for(const x of shared){const point=[Number(x.shared_latitude),Number(x.shared_longitude)];bounds.push(point);const marker=L.marker(point).addTo(map);if(Number.isFinite(Number(x.shared_accuracy))&&Number(x.shared_accuracy)>0)L.circle(point,{radius:Number(x.shared_accuracy)}).addTo(map);marker.bindPopup(`<b>Explicitly shared browser location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br><b>Device:</b> ${esc(x.device)}<br><b>Browser:</b> ${esc(x.browser)}<br><b>OS:</b> ${esc(x.operating_system)}<br><b>Latitude:</b> ${esc(Number(x.shared_latitude).toFixed(6))}<br><b>Longitude:</b> ${esc(Number(x.shared_longitude).toFixed(6))}<br><b>Accuracy:</b> ${x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m')}<br><b>Shared:</b> ${time(x.shared_at)}`)}if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:14});p.scrollIntoView({behavior:'smooth'});
+ const bounds=[];for(const x of mapped){const point=[Number(x.latitude),Number(x.longitude)];bounds.push(point);L.marker(point).addTo(map).bindPopup(`<b>Approximate IP location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br>${esc(x.device)} · ${esc(x.browser)} · ${esc(x.operating_system)}<br>${esc(x.isp)}<br>${time(x.created_at)}`)}for(const x of shared){const point=[Number(x.shared_latitude),Number(x.shared_longitude)];bounds.push(point);const marker=L.marker(point).addTo(map);if(Number.isFinite(Number(x.shared_accuracy))&&Number(x.shared_accuracy)>0)L.circle(point,{radius:Number(x.shared_accuracy)}).addTo(map);marker.bindPopup(`<b>Explicitly shared browser location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br><b>Device:</b> ${esc(x.device)}<br><b>Browser:</b> ${esc(x.browser)}<br><b>OS:</b> ${esc(x.operating_system)}<br><b>Latitude:</b> ${esc(Number(x.shared_latitude).toFixed(6))}<br><b>Longitude:</b> ${esc(Number(x.shared_longitude).toFixed(6))}<br><b>Accuracy:</b> ${x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m')}<br><b>Shared:</b> ${time(x.shared_at)}`)}if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:14});renderFolderExplorer(d.folder_shares||[],d.folder_entries||[]);p.scrollIntoView({behavior:'smooth'});
 }
 async function removeLink(code){if(!confirm('Delete this link and its analytics?'))return;const r=await fetch('/api/links/'+encodeURIComponent(code)+'/delete',{method:'POST'});if(r.ok)location.reload()}
 </script></body></html>
