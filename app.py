@@ -645,12 +645,13 @@ VERIFY_NOTICE = r"""
 <div class="badge">EMAIL VERIFICATION</div><h1 style="font-size:42px;letter-spacing:-2px">Check your email</h1>
 <p class="muted">A verification link was requested for <b>{{email}}</b>. It expires after 24 hours.</p>
 {% if sent %}
-<p>✅ Verification email sent. Check your inbox and spam/junk folder.</p>
+<p>✅ Verification email sent. You can verify now or continue to PulseLink and verify later.</p>
 <a class="btn" href="/login">Go to sign in</a>
+<a class="small" style="display:inline-block;margin-top:10px;text-decoration:none;padding:10px" href="/continue-without-verification">Maybe later — continue to PulseLink</a>
 {% else %}
-<p>⚠️ The email could not be sent right now. You can try again later; your account remains unverified until the email link is completed.</p>
+<p>⚠️ Verification email was not completed. Your account can still be opened now, and you can verify the email later.</p>
 <a class="btn" href="/resend-verification">Try again</a>
-<a class="small" href="/">Maybe next time</a>
+<a class="small" style="display:inline-block;margin-top:10px;text-decoration:none;padding:10px" href="/continue-without-verification">Maybe later — continue to PulseLink</a>
 {% endif %}
 </div></main></body></html>
 """
@@ -717,6 +718,8 @@ def signup():
                      now.isoformat(), 0, hash_token(verify_token), expiry.isoformat()),
                 )
                 con.commit()
+                user_id = con.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()["id"]
+                session["pending_verification_user_id"] = user_id
                 send_owner_signup_notification(full_name, email, purpose, username, now.isoformat())
                 sent = send_verification_email(email, username, verify_token)
                 return render_template_string(VERIFY_NOTICE, style=STYLE, email=email, sent=sent)
@@ -737,12 +740,28 @@ def login():
         con.close()
         if user and check_password_hash(user["password_hash"], password):
             if not user["email_verified"]:
+                session["pending_verification_user_id"] = user["id"]
                 return render_template_string(VERIFY_NOTICE, style=STYLE, email=user["email"], sent=False)
             session.clear()
             session["user_id"] = user["id"]
             return redirect(url_for("dashboard"))
         error = "Invalid username or password."
     return render_template_string(AUTH, style=STYLE, title="Sign in", mode="login", error=error, google_enabled=bool(GOOGLE_CLIENT_ID))
+
+@app.get("/continue-without-verification")
+def continue_without_verification():
+    user_id = session.get("pending_verification_user_id")
+    if not user_id:
+        return redirect(url_for("login"))
+    con = db()
+    user = con.execute("SELECT id,email_verified FROM users WHERE id=?", (user_id,)).fetchone()
+    con.close()
+    if not user:
+        session.pop("pending_verification_user_id", None)
+        return redirect(url_for("login"))
+    session.clear()
+    session["user_id"] = user["id"]
+    return redirect(url_for("dashboard"))
 
 @app.get("/verify-email/<token>")
 def verify_email(token):
