@@ -69,6 +69,7 @@ The dashboard provides a browsable shared tree with:
 - File size and modification time
 - Open for browser-viewable files
 - Download for shared files
+- Download available files as ZIP for the whole shared folder
 - Revoke shared files for a visitor click
 
 File transfer is always initiated by a visible visitor action. The server stores only content the visitor explicitly selected and uploaded. It cannot silently unlock the visitor's entire computer filesystem.
