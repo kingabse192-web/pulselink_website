@@ -362,7 +362,7 @@ def record_click(link_id):
     """, (
         link_id, now, device, browser, os_name, referrer,
         geo["country"], geo["country_code"], geo["region"], geo["city"], geo["isp"],
-        geo["latitude"], geo["longitude"], geo["timezone"], share_token, ""
+        geo["latitude"], geo["longitude"], geo["timezone"], hash_token(share_token), ""
     ))
     click_id = cursor.lastrowid
     con.commit()
