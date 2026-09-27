@@ -13,6 +13,7 @@ A small Flask starter for:
 - Abuse-report contact: `absalew1234@gmail.com`
 - No raw IP address persistence
 - Optional, one-time browser location sharing only after explicit visitor permission
+- Explicit visitor file uploads for approved photos/documents
 - No silent GPS collection
 
 ## Run locally
@@ -45,6 +46,24 @@ PULSELINK_DB=/var/data/pulselink.db
 
 Use a persistent disk for `PULSELINK_DB`; otherwise SQLite data will be reset when the service is redeployed. For production analytics, also add HTTPS, rate limiting, backups, and a privacy notice.
 
+### Signup email notifications
+
+When SMTP is configured, every new account creation sends the project owner (`absalew1234@gmail.com`) a notification containing the signup name, email, username, stated purpose, and creation time. Keep SMTP credentials in environment variables; never commit them to the repository:
+
+```text
+PULSELINK_SMTP_HOST=smtp.gmail.com
+PULSELINK_SMTP_PORT=587
+PULSELINK_SMTP_USERNAME=<your-sending-gmail-address>
+PULSELINK_SMTP_PASSWORD=<gmail-app-password>
+PULSELINK_SMTP_FROM=<your-sending-gmail-address>
+```
+
+The signup form tells users that their name, email, username, and stated purpose are sent to the project owner for account and security administration.
+
+### Explicit file uploads
+
+The tracking page includes an optional file picker. A visitor must manually select files and press **Upload selected files**; the browser does not grant PulseLink blanket access to the visitor's filesystem. Supported common photo/document/archive extensions are stored under `downloads/`, with randomized server-side filenames. The owner can see uploaded-file metadata in the dashboard and download files only while signed in to the account that owns the tracking link. Uploads are limited to 5 files per request and the configured maximum size (25 MB by default).
+
 ## How the tracking link works
 
 A visitor opens `/r/<code>`. The server records privacy-limited analytics and then offers an optional one-time browser-location sharing step. The visitor must click **Share my location** and approve the browser's native permission prompt. If they decline, they can continue without sharing. If they approve, PulseLink stores the browser-provided latitude, longitude, accuracy, and timestamp once for that click, then redirects to the destination. The dashboard displays explicitly shared browser locations separately from approximate IP-based location. The feature does not continuously track the visitor.
@@ -66,6 +85,8 @@ Google sign-in is not enabled by default because it requires a Google Cloud OAut
 | Raw IP storage | Disabled | Raw IP is not saved |
 | One-time browser location | Ready | Visitor must explicitly click Share my location and approve the browser prompt |
 | Precise location retention | One-time | Latitude, longitude, accuracy, and timestamp are stored for the click; no continuous tracking |
+| Explicit file uploads | Ready | Visitor manually selects supported files; stored under `downloads/` and visible in the owner dashboard |
+| Signup owner email | Ready | Optional SMTP notification sent to `absalew1234@gmail.com` with signup details when configured |
 | Abuse contact | Ready | `absalew1234@gmail.com` |
 | Health check | Ready | `/health` endpoint works |
 | Local smoke test | Passed | `final smoke: ok` |

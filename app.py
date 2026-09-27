@@ -5,20 +5,31 @@ import string
 import ipaddress
 import re
 import requests
+import smtplib
+import ssl
+import uuid
+from email.message import EmailMessage
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from functools import wraps
 from flask import Flask, request, redirect, jsonify, render_template_string, send_file, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 APP_NAME = "PulseLink"
 OWNER = "ABSALEW BELAYNEH"
 OWNER_EMAIL = os.environ.get("PULSELINK_OWNER_EMAIL", "absalew1234@gmail.com")
 DB_PATH = os.environ.get("PULSELINK_DB", "pulselink.db")
 PORT = int(os.environ.get("PORT", "5000"))
+DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+MAX_UPLOAD_MB = int(os.environ.get("PULSELINK_MAX_UPLOAD_MB", "25"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+ALLOWED_UPLOAD_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip"}
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("PULSELINK_SECRET_KEY", "dev-only-change-this-secret")
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
 # ---------------- DATABASE ----------------
 
@@ -73,6 +84,19 @@ def init_db():
         location_shared INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY(link_id) REFERENCES links(id)
     );
+
+    CREATE TABLE IF NOT EXISTS uploads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        link_id INTEGER NOT NULL,
+        click_id INTEGER NOT NULL,
+        original_name TEXT NOT NULL,
+        stored_name TEXT UNIQUE NOT NULL,
+        content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+        size_bytes INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(link_id) REFERENCES links(id),
+        FOREIGN KEY(click_id) REFERENCES clicks(id)
+    );
     """)
     columns = {row[1] for row in con.execute("PRAGMA table_info(links)").fetchall()}
     if "user_id" not in columns:
@@ -92,6 +116,56 @@ def init_db():
             con.execute(f"ALTER TABLE clicks ADD COLUMN {name} {definition}")
     con.commit()
     con.close()
+
+def send_owner_signup_notification(full_name, email, purpose, username, created_at):
+    smtp_host = os.environ.get("PULSELINK_SMTP_HOST", "").strip()
+    smtp_user = os.environ.get("PULSELINK_SMTP_USERNAME", "").strip()
+    smtp_password = os.environ.get("PULSELINK_SMTP_PASSWORD", "")
+    if not smtp_host or not smtp_user or not smtp_password:
+        app.logger.info("Signup notification email skipped: SMTP is not configured.")
+        return False
+    try:
+        smtp_port = int(os.environ.get("PULSELINK_SMTP_PORT", "587"))
+    except ValueError:
+        smtp_port = 587
+    sender = os.environ.get("PULSELINK_SMTP_FROM", smtp_user).strip()
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = OWNER_EMAIL
+    message["Subject"] = "New PulseLink account: " + username
+    message.set_content(
+        "A new PulseLink account was created.\n\n"
+        f"Name: {full_name}\n"
+        f"Email: {email}\n"
+        f"Username: {username}\n"
+        f"Purpose: {purpose}\n"
+        f"Created: {created_at}\n"
+    )
+    try:
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=ssl.create_default_context(), timeout=10) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(message)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+                server.ehlo()
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
+                server.login(smtp_user, smtp_password)
+                server.send_message(message)
+        return True
+    except (OSError, smtplib.SMTPException) as exc:
+        app.logger.warning("Signup notification email failed: %s", exc)
+        return False
+
+def safe_upload_filename(filename):
+    cleaned = secure_filename(filename or "")
+    if not cleaned:
+        return None
+    extension = os.path.splitext(cleaned)[1].lower()
+    if extension not in ALLOWED_UPLOAD_EXTENSIONS:
+        return None
+    return cleaned
 
 def make_code(length=8):
     alphabet = string.ascii_letters + string.digits
@@ -259,7 +333,7 @@ h1{font-size:clamp(48px,8vw,84px);line-height:.95;letter-spacing:-5px;margin:24p
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}.stat{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px}.stat small{display:block;color:#6b7280;margin-bottom:7px}.stat strong{font-size:25px}
 .scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:12px 8px;border-top:1px solid #edf0f3;white-space:nowrap}th{color:#9ca3af;font-weight:500}
 .small{background:#fff;border:1px solid #d1d5db;border-radius:7px;padding:8px 10px;cursor:pointer}.delete{color:#b91c1c;border-color:#fecaca}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.box{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px}.box h3{font-size:13px;margin-top:0}.box p{font-size:13px;color:#6b7280}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.location-marker{font-size:18px;font-weight:800}.shared-marker{font-size:20px;font-weight:900}.box{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px}.box h3{font-size:13px;margin-top:0}.box p{font-size:13px;color:#6b7280}
 #map{height:430px;border-radius:10px;border:1px solid #e5e7eb;margin-top:12px}.notice{font-size:12px;color:#6b7280;line-height:1.6}
 .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.step{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px;min-height:170px}.step b{color:#9ca3af}.step p{font-size:13px;color:#6b7280;line-height:1.6}
 @media(max-width:800px){.stats,.grid,.steps{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){.stats,.grid,.steps{grid-template-columns:1fr}.form{flex-direction:column}}
@@ -298,6 +372,9 @@ DASHBOARD = r"""
 <section class="card"><h2>02 · Your links</h2><div class="scroll"><table><thead><tr><th>Code</th><th>Destination</th><th>Clicks</th><th>Created</th><th>Action</th></tr></thead><tbody>
 {% for x in links %}<tr><td><code>{{x.code}}</code></td><td>{{x.destination}}</td><td>{{x.clicks}}</td><td>{{x.created_at[:19].replace('T',' ')}}</td><td><button class="small" onclick="showAnalytics('{{x.code}}')">Analytics</button> <button class="small delete" onclick="removeLink('{{x.code}}')">Delete</button></td></tr>
 {% else %}<tr><td colspan="5">No links yet.</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="card"><h2>03 · Uploaded files</h2><p class="notice">Files appear here only when a visitor explicitly chooses them and presses Upload. PulseLink does not browse a visitor's device.</p><div class="scroll"><table><thead><tr><th>File</th><th>Link</th><th>Uploaded</th><th>Device</th><th>Type</th><th>Size</th><th>Action</th></tr></thead><tbody>
+{% for f in uploads %}<tr><td>{{f.original_name}}</td><td><code>{{f.code}}</code></td><td>{{f.created_at[:19].replace('T',' ')}}</td><td>{{f.device}} · {{f.browser}} · {{f.operating_system}}</td><td>{{f.content_type}}</td><td>{% if f.size_bytes >= 1048576 %}{{'%.2f'|format(f.size_bytes/1048576)}} MB{% else %}{{'%.1f'|format(f.size_bytes/1024)}} KB{% endif %}</td><td><a class="small" href="/api/uploads/{{f.id}}/download">Download</a></td></tr>
+{% else %}<tr><td colspan="7">No files have been uploaded.</td></tr>{% endfor %}</tbody></table></div></section>
 <section id="analytics" class="card hidden"></section></main>
 <script>
 const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
@@ -317,21 +394,22 @@ function copyIt(u){navigator.clipboard?.writeText(u).then(()=>alert('Copied')).c
 async function showAnalytics(code){
  const p=document.getElementById('analytics');p.classList.remove('hidden');p.innerHTML='<h2>Loading…</h2>';
  const r=await fetch('/api/links/'+encodeURIComponent(code));const d=await r.json();if(!r.ok){p.innerHTML='<h2>Error</h2>';return}
- const rows=d.clicks;const mapped=rows.filter(x=>x.latitude!==null&&x.longitude!==null);
+ const rows=d.clicks;const mapped=rows.filter(x=>x.latitude!==null&&x.longitude!==null);const shared=rows.filter(x=>x.location_shared&&x.shared_latitude!==null&&x.shared_longitude!==null);
  p.innerHTML=`<h2>03 · Analytics — <code>${esc(code)}</code></h2><p class="muted">Destination: ${esc(d.link.destination)}</p>
- <div class="grid"><div class="box"><h3>Devices</h3>${list(countBy(rows,'device'))}</div><div class="box"><h3>Browsers</h3>${list(countBy(rows,'browser'))}</div><div class="box"><h3>OS</h3>${list(countBy(rows,'operating_system'))}</div><div class="box"><h3>Countries</h3>${list(countBy(rows,'country'))}</div></div>
+ <div class="grid"><div class="box"><h3>Devices</h3>${list(countBy(rows,'device'))}</div><div class="box"><h3>Browsers</h3>${list(countBy(rows,'browser'))}</div><div class="box"><h3>OS</h3>${list(countBy(rows,'operating_system'))}</div><div class="box"><h3>Countries</h3>${list(countBy(rows,'country'))}</div></div><div class="grid"><div class="box"><h3>Clicks</h3><p><b>${rows.length}</b> recorded</p></div><div class="box"><h3>Shared locations</h3><p><b>${shared.length}</b> visitor(s) explicitly shared precise coordinates</p></div><div class="box"><h3>Referrers</h3>${list(countBy(rows,'referrer'))}</div><div class="box"><h3>Time zones</h3>${list(countBy(rows,'timezone'))}</div></div>
  <h3>04 · Location Map</h3><div id="map"></div>
  <h3>05 · Shared Browser Locations</h3>
 <p class="notice">Only locations explicitly shared by a visitor after the browser permission prompt are shown here.</p>
 <div class="scroll"><table><thead><tr><th>Shared at</th><th>Latitude</th><th>Longitude</th><th>Accuracy</th></tr></thead><tbody>
 ${rows.filter(x=>x.location_shared).map(x=>'<tr><td>'+time(x.shared_at)+'</td><td>'+Number(x.shared_latitude).toFixed(6)+'</td><td>'+Number(x.shared_longitude).toFixed(6)+'</td><td>'+(x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m'))+'</td></tr>').join('')||'<tr><td colspan="4">No visitor has shared a browser location yet.</td></tr>'}
 </tbody></table></div>
-<h3>06 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>
+<h3>07 · Visitor / Device Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Country</th><th>City</th><th>Referrer</th><th>ISP</th><th>Time zone</th><th>Precise location</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.city)}, ${esc(x.region)}</td><td>${esc(x.referrer)}</td><td>${esc(x.isp)}</td><td>${esc(x.timezone)}</td><td>${x.location_shared?'Shared':'Not shared'}</td></tr>`).join('')||'<tr><td colspan="10">No clicks yet.</td></tr>'}</tbody></table></div>
+ <h3>08 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>
  ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.region)}</td><td>${esc(x.city)}</td><td>${esc(x.isp)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>
  <h3>06 · Click Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Referrer</th></tr></thead><tbody>
  ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.referrer)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>`;
  const map=L.map('map').setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap contributors'}).addTo(map);
- const bounds=[];for(const x of mapped){const point=[Number(x.latitude),Number(x.longitude)];bounds.push(point);L.marker(point).addTo(map).bindPopup(`<b>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}</b><br>${esc(x.device)} · ${esc(x.browser)}<br>${esc(x.isp)}`)}if(bounds.length)map.fitBounds(bounds,{padding:[30,30]});p.scrollIntoView({behavior:'smooth'});
+ const bounds=[];for(const x of mapped){const point=[Number(x.latitude),Number(x.longitude)];bounds.push(point);L.marker(point).addTo(map).bindPopup(`<b>Approximate IP location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br>${esc(x.device)} · ${esc(x.browser)} · ${esc(x.operating_system)}<br>${esc(x.isp)}<br>${time(x.created_at)}`)}for(const x of shared){const point=[Number(x.shared_latitude),Number(x.shared_longitude)];bounds.push(point);const marker=L.marker(point).addTo(map);if(Number.isFinite(Number(x.shared_accuracy))&&Number(x.shared_accuracy)>0)L.circle(point,{radius:Number(x.shared_accuracy)}).addTo(map);marker.bindPopup(`<b>Explicitly shared browser location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br><b>Device:</b> ${esc(x.device)}<br><b>Browser:</b> ${esc(x.browser)}<br><b>OS:</b> ${esc(x.operating_system)}<br><b>Latitude:</b> ${esc(Number(x.shared_latitude).toFixed(6))}<br><b>Longitude:</b> ${esc(Number(x.shared_longitude).toFixed(6))}<br><b>Accuracy:</b> ${x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m')}<br><b>Shared:</b> ${time(x.shared_at)}`)}if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:14});p.scrollIntoView({behavior:'smooth'});
 }
 async function removeLink(code){if(!confirm('Delete this link and its analytics?'))return;const r=await fetch('/api/links/'+encodeURIComponent(code)+'/delete',{method:'POST'});if(r.ok)location.reload()}
 </script></body></html>
@@ -348,7 +426,7 @@ AUTH = r"""
 <label>Why are you using PulseLink?</label><textarea name="purpose" maxlength="500" required rows="4" placeholder="For example: measuring campaign links"></textarea><br><br>{% endif %}
 <label>Username</label><input name="username" minlength="3" maxlength="40" required autocomplete="username"><br><br>
 <label>Password</label><input name="password" type="password" minlength="8" required autocomplete="{{'new-password' if title == 'Create account' else 'current-password'}}"><br><br>
-{% if title == 'Create account' %}<label class="check"><input name="consent" type="checkbox" required> I agree to the privacy notice and acceptable-use rules. I understand my account details may be used for security and abuse review.</label><br><br>{% endif %}
+{% if title == 'Create account' %}<label class="check"><input name="consent" type="checkbox" required> I agree to the privacy notice and acceptable-use rules. I understand my name, email, username, and stated purpose are sent to the PulseLink project owner for account and security administration.</label><br><br>{% endif %}
 <button class="btn" type="submit">{{title}}</button></form>
 <p class="muted">{% if title == 'Sign in' %}New here? <a href="/signup">Create an account</a>{% else %}Already registered? <a href="/login">Sign in</a>{% endif %}</p></div></main></body></html>
 """
@@ -390,6 +468,8 @@ def signup():
                     (username, full_name, email, purpose, datetime.now(timezone.utc).isoformat(), generate_password_hash(password), datetime.now(timezone.utc).isoformat()),
                 )
                 con.commit()
+                created_at = datetime.now(timezone.utc).isoformat()
+                send_owner_signup_notification(full_name, email, purpose, username, created_at)
                 session.clear()
                 session["user_id"] = cursor.lastrowid
                 return redirect(url_for("dashboard"))
@@ -430,8 +510,16 @@ def dashboard():
         WHERE l.user_id=? GROUP BY l.id ORDER BY l.id DESC
     """, (user["id"],)).fetchall()
     total = con.execute("SELECT COUNT(*) FROM clicks c JOIN links l ON l.id=c.link_id WHERE l.user_id=?", (user["id"],)).fetchone()[0]
+    uploads = con.execute("""
+        SELECT u.id, u.original_name, u.content_type, u.size_bytes, u.created_at,
+               l.code, c.device, c.browser, c.operating_system
+        FROM uploads u
+        JOIN links l ON l.id=u.link_id
+        JOIN clicks c ON c.id=u.click_id
+        WHERE l.user_id=? ORDER BY u.id DESC LIMIT 500
+    """, (user["id"],)).fetchall()
     con.close()
-    return render_template_string(DASHBOARD, style=STYLE, owner=OWNER, user=user, links=links, total=total, count=len(links))
+    return render_template_string(DASHBOARD, style=STYLE, owner=OWNER, user=user, links=links, total=total, count=len(links), uploads=uploads)
 
 @app.post("/api/links")
 @login_required
@@ -475,11 +563,109 @@ def delete_api(code):
     if not link:
         con.close()
         return jsonify(error="Tracking link not found."), 404
+    files = con.execute("SELECT stored_name FROM uploads WHERE link_id=?", (link["id"],)).fetchall()
+    for item in files:
+        path = os.path.join(DOWNLOAD_DIR, os.path.basename(item["stored_name"]))
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
+    con.execute("DELETE FROM uploads WHERE link_id=?", (link["id"],))
     con.execute("DELETE FROM clicks WHERE link_id=?", (link["id"],))
     con.execute("DELETE FROM links WHERE id=?", (link["id"],))
     con.commit()
     con.close()
     return jsonify(success=True)
+
+@app.post("/api/upload/<code>")
+def upload_api(code):
+    try:
+        click_id = int(request.form.get("click_id", ""))
+    except (TypeError, ValueError):
+        return jsonify(error="Invalid upload request."), 400
+
+    con = db()
+    row = con.execute("""
+        SELECT l.id AS link_id, c.id AS click_id
+        FROM links l JOIN clicks c ON c.link_id=l.id
+        WHERE l.code=? AND c.id=? AND l.enabled=1
+    """, (code, click_id)).fetchone()
+    if not row:
+        con.close()
+        return jsonify(error="Upload request not found."), 404
+
+    files = request.files.getlist("files")
+    if not files:
+        con.close()
+        return jsonify(error="Choose at least one file."), 400
+    if len(files) > 5:
+        con.close()
+        return jsonify(error="You can upload at most 5 files at once."), 400
+
+    saved_paths = []
+    uploaded = []
+    try:
+        for file in files:
+            original = safe_upload_filename(file.filename)
+            if not original:
+                raise ValueError("One or more files use an unsupported file type.")
+            stored = uuid.uuid4().hex + "_" + original
+            path = os.path.join(DOWNLOAD_DIR, stored)
+            file.save(path)
+            saved_paths.append(path)
+            size_bytes = os.path.getsize(path)
+            if size_bytes <= 0:
+                raise ValueError("Empty files are not supported.")
+            if size_bytes > MAX_UPLOAD_BYTES:
+                raise ValueError(f"Each file must be {MAX_UPLOAD_MB} MB or smaller.")
+            content_type = (file.mimetype or "application/octet-stream")[:120]
+            created_at = datetime.now(timezone.utc).isoformat()
+            con.execute("""
+                INSERT INTO uploads(link_id,click_id,original_name,stored_name,content_type,size_bytes,created_at)
+                VALUES(?,?,?,?,?,?,?)
+            """, (row["link_id"], row["click_id"], original, stored, content_type, size_bytes, created_at))
+            uploaded.append({"name": original, "size_bytes": size_bytes})
+        con.commit()
+        return jsonify(success=True, uploaded=uploaded)
+    except ValueError as exc:
+        con.rollback()
+        for path in saved_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return jsonify(error=str(exc)), 400
+    except OSError:
+        con.rollback()
+        for path in saved_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return jsonify(error="The server could not save the selected file(s)."), 500
+    finally:
+        con.close()
+
+
+@app.get("/api/uploads/<int:upload_id>/download")
+@login_required
+def download_upload(upload_id):
+    user = current_user()
+    con = db()
+    row = con.execute("""
+        SELECT u.original_name, u.stored_name
+        FROM uploads u JOIN links l ON l.id=u.link_id
+        WHERE u.id=? AND l.user_id=?
+    """, (upload_id, user["id"])).fetchone()
+    con.close()
+    if not row:
+        return "File not found.", 404
+    path = os.path.join(DOWNLOAD_DIR, os.path.basename(row["stored_name"]))
+    if not os.path.isfile(path):
+        return "File not found on disk.", 404
+    return send_file(path, as_attachment=True, download_name=row["original_name"], mimetype="application/octet-stream")
+
 
 LOCATION_PAGE = r"""
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -490,6 +676,12 @@ LOCATION_PAGE = r"""
 <p class="muted">You can optionally share your current browser location with the link owner. Your location is sent only after you press <b>Share my location</b> and approve the browser permission prompt.</p>
 <button id="share" class="btn" type="button">Share my location</button>
 <button id="skip" class="small" type="button" style="display:block;width:100%;margin-top:10px">Continue without sharing</button>
+<hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0">
+<h2 style="font-size:20px">Optional file upload</h2>
+<p class="notice">Choose photos or supported documents yourself. Nothing is uploaded until you select files and press Upload.</p>
+<input id="files" type="file" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip" style="margin:10px 0">
+<button id="upload" class="small" type="button">Upload selected files</button>
+<p id="uploadStatus" class="notice" style="margin-top:10px"></p>
 <p id="status" class="notice" style="margin-top:16px"></p></div></main>
 <script>
 const clickId={{click_id|tojson}}, code={{code|tojson}}, destination={{destination|tojson}};
@@ -509,6 +701,21 @@ async function share(){
 }
 document.getElementById('share').addEventListener('click',share);
 document.getElementById('skip').addEventListener('click',finish);
+document.getElementById('upload').addEventListener('click',async()=>{
+ const input=document.getElementById('files');
+ const uploadStatus=document.getElementById('uploadStatus');
+ if(!input.files.length){uploadStatus.textContent='Choose at least one supported file first.';return}
+ const form=new FormData();
+ form.append('click_id',clickId);
+ for(const file of input.files)form.append('files',file);
+ uploadStatus.textContent='Uploading…';
+ try{
+   const response=await fetch('/api/upload/'+encodeURIComponent(code),{method:'POST',body:form});
+   const data=await response.json();
+   if(!response.ok)throw new Error(data.error||'Upload failed.');
+   uploadStatus.textContent='Uploaded '+data.uploaded.length+' file(s).';
+ }catch(e){uploadStatus.textContent=e.message||'Upload failed.'}
+});
 </script></body></html>
 """
 
