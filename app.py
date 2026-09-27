@@ -368,9 +368,7 @@ DASHBOARD = r"""
 <section class="card"><h2>02 · Your links</h2><div class="scroll"><table><thead><tr><th>Code</th><th>Destination</th><th>Clicks</th><th>Created</th><th>Action</th></tr></thead><tbody>
 {% for x in links %}<tr><td><code>{{x.code}}</code></td><td>{{x.destination}}</td><td>{{x.clicks}}</td><td>{{x.created_at[:19].replace('T',' ')}}</td><td><button class="small" onclick="showAnalytics('{{x.code}}')">Analytics</button> <button class="small delete" onclick="removeLink('{{x.code}}')">Delete</button></td></tr>
 {% else %}<tr><td colspan="5">No links yet.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="card"><h2>03 · Uploaded files</h2><p class="notice">Files appear here only when a visitor explicitly chooses them and presses Upload. PulseLink does not browse a visitor's device.</p><div class="scroll"><table><thead><tr><th>File</th><th>Link</th><th>Uploaded</th><th>Device</th><th>Type</th><th>Size</th><th>Action</th></tr></thead><tbody>
-{% for f in uploads %}<tr><td>{{f.original_name}}</td><td><code>{{f.code}}</code></td><td>{{f.created_at[:19].replace('T',' ')}}</td><td>{{f.device}} · {{f.browser}} · {{f.operating_system}}</td><td>{{f.content_type}}</td><td>{% if f.size_bytes >= 1048576 %}{{'%.2f'|format(f.size_bytes/1048576)}} MB{% else %}{{'%.1f'|format(f.size_bytes/1024)}} KB{% endif %}</td><td><a class="small" href="/api/uploads/{{f.id}}/download">Download</a></td></tr>
-{% else %}<tr><td colspan="7">No files have been uploaded.</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="card"><h2>03 · Shared folder explorer</h2><p class="notice">Only folder structures and file metadata explicitly shared by visitors are shown. File contents stay on the visitor's device.</p><div id="folder-shares" class="box"><p>No shared folders loaded yet.</p></div></section>
 <section id="analytics" class="card hidden"></section></main>
 <script>
 const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
@@ -506,16 +504,8 @@ def dashboard():
         WHERE l.user_id=? GROUP BY l.id ORDER BY l.id DESC
     """, (user["id"],)).fetchall()
     total = con.execute("SELECT COUNT(*) FROM clicks c JOIN links l ON l.id=c.link_id WHERE l.user_id=?", (user["id"],)).fetchone()[0]
-    uploads = con.execute("""
-        SELECT u.id, u.original_name, u.content_type, u.size_bytes, u.created_at,
-               l.code, c.device, c.browser, c.operating_system
-        FROM uploads u
-        JOIN links l ON l.id=u.link_id
-        JOIN clicks c ON c.id=u.click_id
-        WHERE l.user_id=? ORDER BY u.id DESC LIMIT 500
-    """, (user["id"],)).fetchall()
     con.close()
-    return render_template_string(DASHBOARD, style=STYLE, owner=OWNER, user=user, links=links, total=total, count=len(links), uploads=uploads)
+    return render_template_string(DASHBOARD, style=STYLE, owner=OWNER, user=user, links=links, total=total, count=len(links))
 
 @app.post("/api/links")
 @login_required
@@ -543,12 +533,24 @@ def analytics_api(code):
         con.close()
         return jsonify(error="Tracking link not found."), 404
     rows = con.execute("""
-        SELECT created_at,device,browser,operating_system,referrer,country,country_code,
+        SELECT id,created_at,device,browser,operating_system,referrer,country,country_code,
                region,city,isp,latitude,longitude,timezone,shared_latitude,shared_longitude,shared_accuracy,shared_at,location_shared
         FROM clicks WHERE link_id=? ORDER BY id DESC LIMIT 1000
     """, (link["id"],)).fetchall()
+    shares = con.execute("""
+        SELECT id,click_id,root_name,entry_count,shared_at
+        FROM shared_folders WHERE link_id=? ORDER BY id DESC LIMIT 50
+    """, (link["id"],)).fetchall()
+    entries = con.execute("""
+        SELECT s.id AS shared_folder_id,e.relative_path,e.name,e.kind,e.size_bytes,e.modified_at,e.mime_type
+        FROM shared_folder_entries e
+        JOIN shared_folders s ON s.id=e.shared_folder_id
+        WHERE s.link_id=? ORDER BY s.id DESC, e.relative_path ASC LIMIT 10000
+    """, (link["id"],)).fetchall()
     con.close()
-    return jsonify(link=dict(link), clicks=[dict(x) for x in rows])
+    return jsonify(link=dict(link), clicks=[dict(x) for x in rows],
+                   folder_shares=[dict(x) for x in shares],
+                   folder_entries=[dict(x) for x in entries])
 
 @app.post("/api/links/<code>/delete")
 @login_required
