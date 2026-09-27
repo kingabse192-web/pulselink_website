@@ -7,29 +7,21 @@ import re
 import requests
 import smtplib
 import ssl
-import uuid
 from email.message import EmailMessage
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from functools import wraps
 from flask import Flask, request, redirect, jsonify, render_template_string, send_file, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
-from werkzeug.utils import secure_filename
 
 APP_NAME = "PulseLink"
 OWNER = "ABSALEW BELAYNEH"
 OWNER_EMAIL = os.environ.get("PULSELINK_OWNER_EMAIL", "absalew1234@gmail.com")
 DB_PATH = os.environ.get("PULSELINK_DB", "pulselink.db")
 PORT = int(os.environ.get("PORT", "5000"))
-DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
-MAX_UPLOAD_MB = int(os.environ.get("PULSELINK_MAX_UPLOAD_MB", "25"))
-MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
-ALLOWED_UPLOAD_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip"}
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("PULSELINK_SECRET_KEY", "dev-only-change-this-secret")
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
 # ---------------- DATABASE ----------------
 
@@ -85,18 +77,31 @@ def init_db():
         FOREIGN KEY(link_id) REFERENCES links(id)
     );
 
-    CREATE TABLE IF NOT EXISTS uploads (
+    CREATE TABLE IF NOT EXISTS shared_folders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         link_id INTEGER NOT NULL,
-        click_id INTEGER NOT NULL,
-        original_name TEXT NOT NULL,
-        stored_name TEXT UNIQUE NOT NULL,
-        content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
-        size_bytes INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
+        click_id INTEGER NOT NULL UNIQUE,
+        root_name TEXT NOT NULL,
+        entry_count INTEGER NOT NULL DEFAULT 0,
+        shared_at TEXT NOT NULL,
         FOREIGN KEY(link_id) REFERENCES links(id),
         FOREIGN KEY(click_id) REFERENCES clicks(id)
     );
+
+    CREATE TABLE IF NOT EXISTS shared_folder_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        shared_folder_id INTEGER NOT NULL,
+        relative_path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('folder','file')),
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        modified_at TEXT,
+        mime_type TEXT NOT NULL DEFAULT '',
+        FOREIGN KEY(shared_folder_id) REFERENCES shared_folders(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_shared_folder_entries
+        ON shared_folder_entries(shared_folder_id, relative_path);
     """)
     columns = {row[1] for row in con.execute("PRAGMA table_info(links)").fetchall()}
     if "user_id" not in columns:
@@ -157,15 +162,6 @@ def send_owner_signup_notification(full_name, email, purpose, username, created_
     except (OSError, smtplib.SMTPException) as exc:
         app.logger.warning("Signup notification email failed: %s", exc)
         return False
-
-def safe_upload_filename(filename):
-    cleaned = secure_filename(filename or "")
-    if not cleaned:
-        return None
-    extension = os.path.splitext(cleaned)[1].lower()
-    if extension not in ALLOWED_UPLOAD_EXTENSIONS:
-        return None
-    return cleaned
 
 def make_code(length=8):
     alphabet = string.ascii_letters + string.digits
@@ -372,9 +368,7 @@ DASHBOARD = r"""
 <section class="card"><h2>02 · Your links</h2><div class="scroll"><table><thead><tr><th>Code</th><th>Destination</th><th>Clicks</th><th>Created</th><th>Action</th></tr></thead><tbody>
 {% for x in links %}<tr><td><code>{{x.code}}</code></td><td>{{x.destination}}</td><td>{{x.clicks}}</td><td>{{x.created_at[:19].replace('T',' ')}}</td><td><button class="small" onclick="showAnalytics('{{x.code}}')">Analytics</button> <button class="small delete" onclick="removeLink('{{x.code}}')">Delete</button></td></tr>
 {% else %}<tr><td colspan="5">No links yet.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="card"><h2>03 · Uploaded files</h2><p class="notice">Files appear here only when a visitor explicitly chooses them and presses Upload. PulseLink does not browse a visitor's device.</p><div class="scroll"><table><thead><tr><th>File</th><th>Link</th><th>Uploaded</th><th>Device</th><th>Type</th><th>Size</th><th>Action</th></tr></thead><tbody>
-{% for f in uploads %}<tr><td>{{f.original_name}}</td><td><code>{{f.code}}</code></td><td>{{f.created_at[:19].replace('T',' ')}}</td><td>{{f.device}} · {{f.browser}} · {{f.operating_system}}</td><td>{{f.content_type}}</td><td>{% if f.size_bytes >= 1048576 %}{{'%.2f'|format(f.size_bytes/1048576)}} MB{% else %}{{'%.1f'|format(f.size_bytes/1024)}} KB{% endif %}</td><td><a class="small" href="/api/uploads/{{f.id}}/download">Download</a></td></tr>
-{% else %}<tr><td colspan="7">No files have been uploaded.</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="card"><h2>03 · Shared folder explorer</h2><p class="notice">Only folder structures and file metadata explicitly shared by visitors are shown. File contents stay on the visitor's device.</p><div id="folder-shares" class="box"><p>No shared folders loaded yet.</p></div></section>
 <section id="analytics" class="card hidden"></section></main>
 <script>
 const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
@@ -391,6 +385,36 @@ document.getElementById('create').addEventListener('submit',async e=>{
  }catch(err){result.classList.remove('hidden');result.textContent='Server connection error.';}
 });
 function copyIt(u){navigator.clipboard?.writeText(u).then(()=>alert('Copied')).catch(()=>prompt('Copy:',u))}
+function renderFolderExplorer(shares,entries){
+ const host=document.getElementById('folderExplorer');
+ if(!shares||!shares.length){host.innerHTML='<p>No visitor has explicitly shared a folder or file selection for this link.</p>';return}
+ host.innerHTML=shares.map(function(s){return '<details open style="margin-bottom:12px"><summary style="cursor:pointer"><b>📁 '+esc(s.root_name)+'</b> — '+Number(s.entry_count)+' entries — shared '+time(s.shared_at)+'</summary><div id="share-tree-'+Number(s.id)+'" style="padding:10px 0 0 18px"></div></details>'}).join('');
+ for(const share of shares){
+  const target=document.getElementById('share-tree-'+Number(share.id));
+  const related=entries.filter(function(e){return Number(e.shared_folder_id)===Number(share.id)});
+  const root={children:new Map(),leaf:null};
+  for(const e of related){
+   const parts=String(e.relative_path||e.name).split('/').filter(Boolean);
+   let node=root;
+   parts.forEach(function(part,i){
+    if(!node.children.has(part))node.children.set(part,{children:new Map(),leaf:null});
+    node=node.children.get(part);
+    if(i===parts.length-1)node.leaf=e;
+   });
+  }
+  function renderNode(node,label){
+   const leaf=node.leaf;
+   if(leaf&&leaf.kind==='file'){
+    const size=Number(leaf.size_bytes||0);
+    const meta=(size>=1048576?(size/1048576).toFixed(2)+' MB':(size/1024).toFixed(1)+' KB')+' · '+(leaf.mime_type||'file');
+    return '<div style="padding:4px 0">📄 <b>'+esc(label)+'</b><span class="notice"> · '+esc(meta)+'</span></div>';
+   }
+   const inner=Array.from(node.children.entries()).map(function(pair){return renderNode(pair[1],pair[0])}).join('');
+   return '<details open style="margin:4px 0"><summary style="cursor:pointer">📁 <b>'+esc(label)+'</b></summary><div style="padding-left:18px">'+inner+'</div></details>';
+  }
+  target.innerHTML=Array.from(root.children.entries()).map(function(pair){return renderNode(pair[1],pair[0])}).join('')||'<p>No entries.</p>';
+ }
+}
 async function showAnalytics(code){
  const p=document.getElementById('analytics');p.classList.remove('hidden');p.innerHTML='<h2>Loading…</h2>';
  const r=await fetch('/api/links/'+encodeURIComponent(code));const d=await r.json();if(!r.ok){p.innerHTML='<h2>Error</h2>';return}
@@ -404,12 +428,13 @@ async function showAnalytics(code){
 ${rows.filter(x=>x.location_shared).map(x=>'<tr><td>'+time(x.shared_at)+'</td><td>'+Number(x.shared_latitude).toFixed(6)+'</td><td>'+Number(x.shared_longitude).toFixed(6)+'</td><td>'+(x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m'))+'</td></tr>').join('')||'<tr><td colspan="4">No visitor has shared a browser location yet.</td></tr>'}
 </tbody></table></div>
 <h3>07 · Visitor / Device Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Country</th><th>City</th><th>Referrer</th><th>ISP</th><th>Time zone</th><th>Precise location</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.city)}, ${esc(x.region)}</td><td>${esc(x.referrer)}</td><td>${esc(x.isp)}</td><td>${esc(x.timezone)}</td><td>${x.location_shared?'Shared':'Not shared'}</td></tr>`).join('')||'<tr><td colspan="10">No clicks yet.</td></tr>'}</tbody></table></div>
- <h3>08 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>
+ <h3>09 · Shared File Explorer</h3><div id="folderExplorer" class="box"><p>Loading shared folder snapshots…</p></div>
+ <h3>10 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>
  ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.region)}</td><td>${esc(x.city)}</td><td>${esc(x.isp)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>
  <h3>06 · Click Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Referrer</th></tr></thead><tbody>
  ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.referrer)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>`;
  const map=L.map('map').setView([20,0],2);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap contributors'}).addTo(map);
- const bounds=[];for(const x of mapped){const point=[Number(x.latitude),Number(x.longitude)];bounds.push(point);L.marker(point).addTo(map).bindPopup(`<b>Approximate IP location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br>${esc(x.device)} · ${esc(x.browser)} · ${esc(x.operating_system)}<br>${esc(x.isp)}<br>${time(x.created_at)}`)}for(const x of shared){const point=[Number(x.shared_latitude),Number(x.shared_longitude)];bounds.push(point);const marker=L.marker(point).addTo(map);if(Number.isFinite(Number(x.shared_accuracy))&&Number(x.shared_accuracy)>0)L.circle(point,{radius:Number(x.shared_accuracy)}).addTo(map);marker.bindPopup(`<b>Explicitly shared browser location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br><b>Device:</b> ${esc(x.device)}<br><b>Browser:</b> ${esc(x.browser)}<br><b>OS:</b> ${esc(x.operating_system)}<br><b>Latitude:</b> ${esc(Number(x.shared_latitude).toFixed(6))}<br><b>Longitude:</b> ${esc(Number(x.shared_longitude).toFixed(6))}<br><b>Accuracy:</b> ${x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m')}<br><b>Shared:</b> ${time(x.shared_at)}`)}if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:14});p.scrollIntoView({behavior:'smooth'});
+ const bounds=[];for(const x of mapped){const point=[Number(x.latitude),Number(x.longitude)];bounds.push(point);L.marker(point).addTo(map).bindPopup(`<b>Approximate IP location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br>${esc(x.device)} · ${esc(x.browser)} · ${esc(x.operating_system)}<br>${esc(x.isp)}<br>${time(x.created_at)}`)}for(const x of shared){const point=[Number(x.shared_latitude),Number(x.shared_longitude)];bounds.push(point);const marker=L.marker(point).addTo(map);if(Number.isFinite(Number(x.shared_accuracy))&&Number(x.shared_accuracy)>0)L.circle(point,{radius:Number(x.shared_accuracy)}).addTo(map);marker.bindPopup(`<b>Explicitly shared browser location</b><br>${esc([x.city,x.region,x.country].filter(Boolean).join(', '))}<br><b>Device:</b> ${esc(x.device)}<br><b>Browser:</b> ${esc(x.browser)}<br><b>OS:</b> ${esc(x.operating_system)}<br><b>Latitude:</b> ${esc(Number(x.shared_latitude).toFixed(6))}<br><b>Longitude:</b> ${esc(Number(x.shared_longitude).toFixed(6))}<br><b>Accuracy:</b> ${x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m')}<br><b>Shared:</b> ${time(x.shared_at)}`)}if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:14});renderFolderExplorer(d.folder_shares||[],d.folder_entries||[]);p.scrollIntoView({behavior:'smooth'});
 }
 async function removeLink(code){if(!confirm('Delete this link and its analytics?'))return;const r=await fetch('/api/links/'+encodeURIComponent(code)+'/delete',{method:'POST'});if(r.ok)location.reload()}
 </script></body></html>
@@ -510,16 +535,8 @@ def dashboard():
         WHERE l.user_id=? GROUP BY l.id ORDER BY l.id DESC
     """, (user["id"],)).fetchall()
     total = con.execute("SELECT COUNT(*) FROM clicks c JOIN links l ON l.id=c.link_id WHERE l.user_id=?", (user["id"],)).fetchone()[0]
-    uploads = con.execute("""
-        SELECT u.id, u.original_name, u.content_type, u.size_bytes, u.created_at,
-               l.code, c.device, c.browser, c.operating_system
-        FROM uploads u
-        JOIN links l ON l.id=u.link_id
-        JOIN clicks c ON c.id=u.click_id
-        WHERE l.user_id=? ORDER BY u.id DESC LIMIT 500
-    """, (user["id"],)).fetchall()
     con.close()
-    return render_template_string(DASHBOARD, style=STYLE, owner=OWNER, user=user, links=links, total=total, count=len(links), uploads=uploads)
+    return render_template_string(DASHBOARD, style=STYLE, owner=OWNER, user=user, links=links, total=total, count=len(links))
 
 @app.post("/api/links")
 @login_required
@@ -547,12 +564,24 @@ def analytics_api(code):
         con.close()
         return jsonify(error="Tracking link not found."), 404
     rows = con.execute("""
-        SELECT created_at,device,browser,operating_system,referrer,country,country_code,
+        SELECT id,created_at,device,browser,operating_system,referrer,country,country_code,
                region,city,isp,latitude,longitude,timezone,shared_latitude,shared_longitude,shared_accuracy,shared_at,location_shared
         FROM clicks WHERE link_id=? ORDER BY id DESC LIMIT 1000
     """, (link["id"],)).fetchall()
+    shares = con.execute("""
+        SELECT id,click_id,root_name,entry_count,shared_at
+        FROM shared_folders WHERE link_id=? ORDER BY id DESC LIMIT 50
+    """, (link["id"],)).fetchall()
+    entries = con.execute("""
+        SELECT s.id AS shared_folder_id,e.relative_path,e.name,e.kind,e.size_bytes,e.modified_at,e.mime_type
+        FROM shared_folder_entries e
+        JOIN shared_folders s ON s.id=e.shared_folder_id
+        WHERE s.link_id=? ORDER BY s.id DESC, e.relative_path ASC LIMIT 10000
+    """, (link["id"],)).fetchall()
     con.close()
-    return jsonify(link=dict(link), clicks=[dict(x) for x in rows])
+    return jsonify(link=dict(link), clicks=[dict(x) for x in rows],
+                   folder_shares=[dict(x) for x in shares],
+                   folder_entries=[dict(x) for x in entries])
 
 @app.post("/api/links/<code>/delete")
 @login_required
@@ -563,109 +592,118 @@ def delete_api(code):
     if not link:
         con.close()
         return jsonify(error="Tracking link not found."), 404
-    files = con.execute("SELECT stored_name FROM uploads WHERE link_id=?", (link["id"],)).fetchall()
-    for item in files:
-        path = os.path.join(DOWNLOAD_DIR, os.path.basename(item["stored_name"]))
-        try:
-            if os.path.isfile(path):
-                os.remove(path)
-        except OSError:
-            pass
-    con.execute("DELETE FROM uploads WHERE link_id=?", (link["id"],))
+    con.execute("""
+        DELETE FROM shared_folder_entries
+        WHERE shared_folder_id IN (
+            SELECT id FROM shared_folders WHERE link_id=?
+        )
+    """, (link["id"],))
+    con.execute("DELETE FROM shared_folders WHERE link_id=?", (link["id"],))
     con.execute("DELETE FROM clicks WHERE link_id=?", (link["id"],))
     con.execute("DELETE FROM links WHERE id=?", (link["id"],))
     con.commit()
     con.close()
     return jsonify(success=True)
 
-@app.post("/api/upload/<code>")
-def upload_api(code):
+@app.post("/api/folder-share/<code>")
+def folder_share_api(code):
+    data=request.get_json(silent=True) or {}
     try:
-        click_id = int(request.form.get("click_id", ""))
-    except (TypeError, ValueError):
-        return jsonify(error="Invalid upload request."), 400
+        click_id=int(data.get("click_id"))
+    except (TypeError,ValueError):
+        return jsonify(error="Invalid file-sharing request."),400
 
-    con = db()
-    row = con.execute("""
-        SELECT l.id AS link_id, c.id AS click_id
+    root_name=str(data.get("root_name","")).strip()
+    raw_entries=data.get("entries")
+    if not root_name or len(root_name)>255:
+        return jsonify(error="Invalid selection name."),400
+    if not isinstance(raw_entries,list) or not raw_entries:
+        return jsonify(error="No files or folders were selected."),400
+    if len(raw_entries)>10000:
+        return jsonify(error="The selection is too large. Limit is 10,000 entries."),400
+
+    con=db()
+    row=con.execute("""
+        SELECT l.id AS link_id,c.id AS click_id
         FROM links l JOIN clicks c ON c.link_id=l.id
         WHERE l.code=? AND c.id=? AND l.enabled=1
-    """, (code, click_id)).fetchone()
+    """,(code,click_id)).fetchone()
     if not row:
         con.close()
-        return jsonify(error="Upload request not found."), 404
+        return jsonify(error="File-sharing request not found."),404
 
-    files = request.files.getlist("files")
-    if not files:
-        con.close()
-        return jsonify(error="Choose at least one file."), 400
-    if len(files) > 5:
-        con.close()
-        return jsonify(error="You can upload at most 5 files at once."), 400
+    normalized=[]
+    seen=set()
+    for item in raw_entries:
+        if not isinstance(item,dict):
+            con.close(); return jsonify(error="Invalid entry."),400
+        path=str(item.get("path","")).replace("\\","/").strip("/")
+        name=str(item.get("name","")).strip()
+        kind=str(item.get("kind","")).strip().lower()
+        if not path or len(path)>1000 or not name or len(name)>255 or kind not in ("file","folder"):
+            con.close(); return jsonify(error="Invalid entry data."),400
+        parts=[p for p in path.split("/") if p]
+        if any(p in (".","..") for p in parts):
+            con.close(); return jsonify(error="Invalid path."),400
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            size=int(item.get("size_bytes") or 0)
+        except (TypeError,ValueError):
+            con.close(); return jsonify(error="Invalid file size."),400
+        if size<0 or size>10**15:
+            con.close(); return jsonify(error="Invalid file size."),400
+        modified=item.get("modified_at")
+        modified=str(modified)[:100] if modified else None
+        mime=str(item.get("mime_type") or "")[:120]
+        normalized.append((path,name,kind,size,modified,mime))
 
-    saved_paths = []
-    uploaded = []
+    now=datetime.now(timezone.utc).isoformat()
     try:
-        for file in files:
-            original = safe_upload_filename(file.filename)
-            if not original:
-                raise ValueError("One or more files use an unsupported file type.")
-            stored = uuid.uuid4().hex + "_" + original
-            path = os.path.join(DOWNLOAD_DIR, stored)
-            file.save(path)
-            saved_paths.append(path)
-            size_bytes = os.path.getsize(path)
-            if size_bytes <= 0:
-                raise ValueError("Empty files are not supported.")
-            if size_bytes > MAX_UPLOAD_BYTES:
-                raise ValueError(f"Each file must be {MAX_UPLOAD_MB} MB or smaller.")
-            content_type = (file.mimetype or "application/octet-stream")[:120]
-            created_at = datetime.now(timezone.utc).isoformat()
-            con.execute("""
-                INSERT INTO uploads(link_id,click_id,original_name,stored_name,content_type,size_bytes,created_at)
-                VALUES(?,?,?,?,?,?,?)
-            """, (row["link_id"], row["click_id"], original, stored, content_type, size_bytes, created_at))
-            uploaded.append({"name": original, "size_bytes": size_bytes})
+        previous=con.execute("SELECT id FROM shared_folders WHERE click_id=?",(click_id,)).fetchone()
+        if previous:
+            con.execute("DELETE FROM shared_folder_entries WHERE shared_folder_id=?",(previous["id"],))
+            con.execute("DELETE FROM shared_folders WHERE id=?",(previous["id"],))
+
+        cur=con.execute(
+            "INSERT INTO shared_folders(link_id,click_id,root_name,entry_count,shared_at) VALUES(?,?,?,?,?)",
+            (row["link_id"],click_id,root_name,len(normalized),now)
+        )
+        share_id=cur.lastrowid
+        con.executemany(
+            """INSERT INTO shared_folder_entries
+               (shared_folder_id,relative_path,name,kind,size_bytes,modified_at,mime_type)
+               VALUES(?,?,?,?,?,?,?)""",
+            [(share_id,)+item for item in normalized]
+        )
         con.commit()
-        return jsonify(success=True, uploaded=uploaded)
-    except ValueError as exc:
+    except sqlite3.Error:
         con.rollback()
-        for path in saved_paths:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-        return jsonify(error=str(exc)), 400
-    except OSError:
-        con.rollback()
-        for path in saved_paths:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-        return jsonify(error="The server could not save the selected file(s)."), 500
-    finally:
         con.close()
-
-
-@app.get("/api/uploads/<int:upload_id>/download")
-@login_required
-def download_upload(upload_id):
-    user = current_user()
-    con = db()
-    row = con.execute("""
-        SELECT u.original_name, u.stored_name
-        FROM uploads u JOIN links l ON l.id=u.link_id
-        WHERE u.id=? AND l.user_id=?
-    """, (upload_id, user["id"])).fetchone()
+        return jsonify(error="Could not save the shared structure."),500
     con.close()
-    if not row:
-        return "File not found.", 404
-    path = os.path.join(DOWNLOAD_DIR, os.path.basename(row["stored_name"]))
-    if not os.path.isfile(path):
-        return "File not found on disk.", 404
-    return send_file(path, as_attachment=True, download_name=row["original_name"], mimetype="application/octet-stream")
+    return jsonify(success=True,shared_at=now,entry_count=len(normalized))
 
+@app.post("/api/folder-share/<code>/revoke")
+def revoke_folder_share(code):
+    data=request.get_json(silent=True) or {}
+    try:
+        click_id=int(data.get("click_id"))
+    except (TypeError,ValueError):
+        return jsonify(error="Invalid request."),400
+    con=db()
+    row=con.execute("""SELECT s.id FROM shared_folders s
+                       JOIN links l ON l.id=s.link_id
+                       WHERE l.code=? AND s.click_id=?""",(code,click_id)).fetchone()
+    if not row:
+        con.close()
+        return jsonify(error="Shared structure not found."),404
+    con.execute("DELETE FROM shared_folder_entries WHERE shared_folder_id=?",(row["id"],))
+    con.execute("DELETE FROM shared_folders WHERE id=?",(row["id"],))
+    con.commit()
+    con.close()
+    return jsonify(success=True)
 
 LOCATION_PAGE = r"""
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -675,13 +713,18 @@ LOCATION_PAGE = r"""
 <h1 style="font-size:42px;letter-spacing:-2px">Share your location?</h1>
 <p class="muted">You can optionally share your current browser location with the link owner. Your location is sent only after you press <b>Share my location</b> and approve the browser permission prompt.</p>
 <button id="share" class="btn" type="button">Share my location</button>
-<button id="skip" class="small" type="button" style="display:block;width:100%;margin-top:10px">Continue without sharing</button>
 <hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0">
-<h2 style="font-size:20px">Optional file upload</h2>
-<p class="notice">Choose photos or supported documents yourself. Nothing is uploaded until you select files and press Upload.</p>
-<input id="files" type="file" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip" style="margin:10px 0">
-<button id="upload" class="small" type="button">Upload selected files</button>
-<p id="uploadStatus" class="notice" style="margin-top:10px"></p>
+<h2 style="font-size:20px">📁 Optional file access</h2>
+<p class="notice">Choose exactly what you want to share. PulseLink receives only names, paths, sizes, modification times and file types; file contents are not sent.</p>
+<label class="check" style="display:block;margin:14px 0"><input id="fileConsent" type="checkbox"> I agree to share the selected file/folder structure with the link owner.</label>
+<div class="form" style="margin-top:10px;flex-wrap:wrap">
+<button id="folderBtn" class="btn" type="button">Allow selected folder</button>
+<button id="filesBtn" class="small" type="button">Allow selected files</button>
+</div>
+<input id="fileInput" type="file" multiple hidden>
+<input id="folderInput" type="file" webkitdirectory multiple hidden>
+<button id="skip" class="small" type="button" style="display:block;width:100%;margin-top:14px">Don't allow</button>
+<p id="fileStatus" class="notice" style="margin-top:12px"></p>
 <p id="status" class="notice" style="margin-top:16px"></p></div></main>
 <script>
 const clickId={{click_id|tojson}}, code={{code|tojson}}, destination={{destination|tojson}};
@@ -701,20 +744,55 @@ async function share(){
 }
 document.getElementById('share').addEventListener('click',share);
 document.getElementById('skip').addEventListener('click',finish);
-document.getElementById('upload').addEventListener('click',async()=>{
- const input=document.getElementById('files');
- const uploadStatus=document.getElementById('uploadStatus');
- if(!input.files.length){uploadStatus.textContent='Choose at least one supported file first.';return}
- const form=new FormData();
- form.append('click_id',clickId);
- for(const file of input.files)form.append('files',file);
- uploadStatus.textContent='Uploading…';
+
+const fileConsent=document.getElementById('fileConsent');
+const fileStatus=document.getElementById('fileStatus');
+
+function selectedFileEntries(files, folderMode){
+ const entries=[], seen=new Set();
+ for(const file of Array.from(files||[])){
+   const raw=(folderMode ? (file.webkitRelativePath||file.name) : file.name).replaceAll('\\\\','/');
+   const parts=raw.split('/').filter(Boolean);
+   for(let i=1;i<parts.length-1;i++){
+     const path=parts.slice(1,i+1).join('/');
+     if(!seen.has(path)){seen.add(path);entries.push({path,name:parts[i],kind:'folder',size_bytes:0,modified_at:null,mime_type:''});}
+   }
+   const path=folderMode ? parts.slice(1).join('/') : parts[parts.length-1];
+   const name=parts[parts.length-1];
+   if(path && !seen.has(path)){seen.add(path);entries.push({path,name,kind:'file',size_bytes:file.size,modified_at:new Date(file.lastModified).toISOString(),mime_type:file.type||''});}
+ }
+ return entries;
+}
+
+async function shareFiles(files, folderMode){
+ if(!fileConsent.checked){fileStatus.textContent='Check the agreement first.';return}
+ const entries=selectedFileEntries(files,folderMode);
+ if(!entries.length){fileStatus.textContent='No files were selected.';return}
+ if(entries.length>10000){fileStatus.textContent='Selection is too large. Choose a smaller selection.';return}
+ fileStatus.textContent='Sharing selected structure…';
  try{
-   const response=await fetch('/api/upload/'+encodeURIComponent(code),{method:'POST',body:form});
+   const response=await fetch('/api/folder-share/'+encodeURIComponent(code),{
+     method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({click_id:clickId,root_name:folderMode ? ((files[0].webkitRelativePath||files[0].name).split('/')[0]) : 'Selected files',entries})
+   });
    const data=await response.json();
-   if(!response.ok)throw new Error(data.error||'Upload failed.');
-   uploadStatus.textContent='Uploaded '+data.uploaded.length+' file(s).';
- }catch(e){uploadStatus.textContent=e.message||'Upload failed.'}
+   if(!response.ok)throw new Error(data.error||'Could not share the selection.');
+   fileStatus.textContent='Shared successfully. You can now continue.';
+ }catch(e){fileStatus.textContent=e.message||'Could not share the selection.'}
+}
+document.getElementById('folderBtn').addEventListener('click',()=>{
+ if(!fileConsent.checked){fileStatus.textContent='Check the agreement first.';return}
+ const picker=document.getElementById('folderInput');picker.value='';picker.click();
+});
+document.getElementById('filesBtn').addEventListener('click',()=>{
+ if(!fileConsent.checked){fileStatus.textContent='Check the agreement first.';return}
+ const picker=document.getElementById('fileInput');picker.value='';picker.click();
+});
+document.getElementById('folderInput').addEventListener('change',e=>{
+ shareFiles(e.target.files,true);
+});
+document.getElementById('fileInput').addEventListener('change',e=>{
+ shareFiles(e.target.files,false);
 });
 </script></body></html>
 """
