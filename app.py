@@ -19,6 +19,7 @@ from email.message import EmailMessage
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlencode
 from functools import wraps
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask import Flask, request, redirect, jsonify, render_template_string, send_file, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -38,6 +39,7 @@ GOOGLE_CLIENT_SECRET = os.environ.get("PULSELINK_GOOGLE_CLIENT_SECRET", "").stri
 GOOGLE_REDIRECT_URI = os.environ.get("PULSELINK_GOOGLE_REDIRECT_URI", "").strip()
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 app.secret_key = os.environ.get("PULSELINK_SECRET_KEY", "dev-only-change-this-secret")
 app.config["MAX_CONTENT_LENGTH"] = MAX_SHARED_UPLOAD_BYTES
 os.makedirs(SHARED_STORAGE_ROOT, exist_ok=True)
@@ -374,6 +376,12 @@ def record_click(link_id):
     con.close()
     return click_id, share_token
 
+def public_base_url():
+    configured = os.environ.get("PULSELINK_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    return request.host_url.rstrip("/")
+
 def send_verification_email(email, username, token):
     smtp_host = os.environ.get("PULSELINK_SMTP_HOST", "").strip()
     smtp_user = os.environ.get("PULSELINK_SMTP_USERNAME", "").strip()
@@ -386,7 +394,7 @@ def send_verification_email(email, username, token):
     except ValueError:
         smtp_port = 587
     sender = os.environ.get("PULSELINK_SMTP_FROM", smtp_user).strip()
-    verify_url = request.host_url.rstrip("/") + url_for("verify_email", token=token)
+    verify_url = public_base_url() + url_for("verify_email", token=token)
     message = EmailMessage()
     message["From"] = sender
     message["To"] = email
@@ -938,7 +946,7 @@ def create_api():
     con.execute("INSERT INTO links(user_id,code,destination,created_at) VALUES(?,?,?,?)", (user["id"], code, destination, datetime.now(timezone.utc).isoformat()))
     con.commit()
     con.close()
-    return jsonify(code=code, url=request.host_url.rstrip("/") + "/r/" + code)
+    return jsonify(code=code, url=public_base_url() + "/r/" + code)
 
 @app.get("/api/links/<code>")
 @login_required
