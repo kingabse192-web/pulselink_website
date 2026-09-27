@@ -1,3 +1,13 @@
+
+
+def test_public_base_url_is_used_for_generated_links(monkeypatch):
+    client = pulselink.app.test_client()
+    client = make_user(client, monkeypatch, username="publicurl", email="publicurl@example.com")
+    monkeypatch.setenv("PULSELINK_PUBLIC_BASE_URL", "https://pulse.example.test")
+    response = client.post("/api/links", json={"destination":"https://example.com/hello"})
+    assert response.status_code == 200
+    assert response.json["url"] == "https://pulse.example.test/r/" + response.json["code"]
+
 import pytest
 import io
 import os
