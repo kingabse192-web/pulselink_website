@@ -577,16 +577,65 @@ AUTH = r"""
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{title}} — PulseLink</title><style>{{style}}</style></head><body>
 <header><div class="logo">ABSALEW <span>BELAYNEH</span></div><a class="navlink" href="/">← Home</a></header>
-<main class="wrap" style="max-width:520px"><div class="card"><div class="badge">PULSELINK ACCOUNT</div><h1 style="font-size:42px;letter-spacing:-2px">{{title}}</h1>
-{% if error %}<p style="color:#b91c1c">{{error}}</p>{% endif %}<form method="post">
-{% if title == 'Create account' %}<label>Full name</label><input name="full_name" maxlength="100" required autocomplete="name"><br><br>
+<main class="wrap" style="max-width:540px"><div class="card"><div class="badge">PULSELINK ACCOUNT</div><h1 style="font-size:42px;letter-spacing:-2px">{{title}}</h1>
+{% if error %}<p style="color:#b91c1c">{{error}}</p>{% endif %}
+{% if mode == 'signup' %}
+<form method="post">
+<label>Full name</label><input name="full_name" maxlength="100" required autocomplete="name"><br><br>
 <label>Email address</label><input name="email" type="email" maxlength="254" required autocomplete="email"><br><br>
-<label>Why are you using PulseLink?</label><textarea name="purpose" maxlength="500" required rows="4" placeholder="For example: measuring campaign links"></textarea><br><br>{% endif %}
+<label>Why are you using PulseLink?</label><textarea name="purpose" maxlength="500" required rows="4" placeholder="For example: measuring campaign links"></textarea><br><br>
 <label>Username</label><input name="username" minlength="3" maxlength="40" required autocomplete="username"><br><br>
-<label>Password</label><input name="password" type="password" minlength="8" required autocomplete="{{'new-password' if title == 'Create account' else 'current-password'}}"><br><br>
-{% if title == 'Create account' %}<label class="check"><input name="consent" type="checkbox" required> I agree to the privacy notice and acceptable-use rules. I understand my name, email, username, and stated purpose are sent to the PulseLink project owner for account and security administration.</label><br><br>{% endif %}
-<button class="btn" type="submit">{{title}}</button></form>
-<p class="muted">{% if title == 'Sign in' %}New here? <a href="/signup">Create an account</a>{% else %}Already registered? <a href="/login">Sign in</a>{% endif %}</p></div></main></body></html>
+<label>Password</label><input name="password" type="password" minlength="8" required autocomplete="new-password"><br><br>
+<label class="check"><input name="consent" type="checkbox" required> I agree to the privacy notice and acceptable-use rules and understand the account information is used for account administration.</label><br><br>
+<button class="btn" type="submit">Create account</button>
+</form>
+{% else %}
+<form method="post">
+<label>Username</label><input name="username" minlength="3" maxlength="40" required autocomplete="username"><br><br>
+<label>Password</label><input name="password" type="password" minlength="8" required autocomplete="current-password"><br><br>
+<button class="btn" type="submit">Sign in</button>
+</form>
+{% endif %}
+{% if google_enabled %}
+<div style="text-align:center;margin:18px 0;color:#9ca3af">or</div>
+<a class="small" style="display:block;text-align:center;text-decoration:none;padding:12px" href="/auth/google">Continue with Google</a>
+{% endif %}
+{% if mode == 'login' %}
+<p class="muted">Forgot your verification email? <a href="/resend-verification">Resend it</a></p>
+<p class="muted">New here? <a href="/signup">Create an account</a></p>
+{% else %}
+<p class="muted">Already registered? <a href="/login">Sign in</a></p>
+{% endif %}
+</div></main></body></html>
+"""
+
+VERIFY_NOTICE = r"""
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verify email — PulseLink</title><style>{{style}}</style></head><body>
+<main class="wrap" style="max-width:620px;padding-top:70px"><div class="card" style="text-align:center">
+<div class="badge">EMAIL VERIFICATION</div><h1 style="font-size:42px;letter-spacing:-2px">Check your email</h1>
+<p class="muted">A verification link was requested for <b>{{email}}</b>. It expires after 24 hours.</p>
+<p>{{"Verification email sent." if sent else "The verification email could not be sent. Configure SMTP and request another verification email."}}</p>
+<a class="btn" href="/resend-verification">Resend verification</a> <a class="small" href="/login">Sign in</a>
+</div></main></body></html>
+"""
+
+RESEND = r"""
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Resend verification — PulseLink</title><style>{{style}}</style></head><body>
+<main class="wrap" style="max-width:540px;padding-top:70px"><div class="card">
+<div class="badge">EMAIL VERIFICATION</div><h1 style="font-size:42px;letter-spacing:-2px">Resend</h1>
+<p class="muted">{{message}}</p>
+<form method="post"><input name="email" type="email" maxlength="254" required placeholder="you@example.com"><br><br><button class="btn">Request new verification email</button></form>
+</div></main></body></html>
+"""
+
+MESSAGE = r"""
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{title}} — PulseLink</title><style>{{style}}</style></head><body>
+<main class="wrap" style="max-width:620px;padding-top:80px"><div class="card" style="text-align:center">
+<div class="badge">PULSELINK</div><h1 style="font-size:42px;letter-spacing:-2px">{{title}}</h1><p class="muted">{{message}}</p>
+<a class="btn" href="{{action_href}}">{{action_text}}</a></div></main></body></html>
 """
 
 # ---------------- ROUTES ----------------
@@ -621,36 +670,177 @@ def signup():
         else:
             con = db()
             try:
-                cursor = con.execute(
-                    "INSERT INTO users(username,full_name,email,purpose,consent_at,password_hash,created_at) VALUES(?,?,?,?,?,?,?)",
-                    (username, full_name, email, purpose, datetime.now(timezone.utc).isoformat(), generate_password_hash(password), datetime.now(timezone.utc).isoformat()),
+                verify_token = secrets.token_urlsafe(32)
+                now = datetime.now(timezone.utc)
+                expiry = now + __import__("datetime").timedelta(hours=24)
+                con.execute(
+                    """INSERT INTO users(
+                        username,full_name,email,purpose,consent_at,password_hash,created_at,
+                        email_verified,email_verification_token_hash,email_verification_expires_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (username, full_name, email, purpose, now.isoformat(), generate_password_hash(password),
+                     now.isoformat(), 0, hash_token(verify_token), expiry.isoformat()),
                 )
                 con.commit()
-                created_at = datetime.now(timezone.utc).isoformat()
-                send_owner_signup_notification(full_name, email, purpose, username, created_at)
-                session.clear()
-                session["user_id"] = cursor.lastrowid
-                return redirect(url_for("dashboard"))
+                send_owner_signup_notification(full_name, email, purpose, username, now.isoformat())
+                sent = send_verification_email(email, username, verify_token)
+                return render_template_string(VERIFY_NOTICE, style=STYLE, email=email, sent=sent)
             except sqlite3.IntegrityError:
                 error = "That username or email address is already registered."
             finally:
                 con.close()
-    return render_template_string(AUTH, style=STYLE, title="Create account", error=error)
+    return render_template_string(AUTH, style=STYLE, title="Create account", mode="signup", error=error, google_enabled=bool(GOOGLE_CLIENT_ID))
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
     if request.method == "POST":
         username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
         con = db()
         user = con.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
         con.close()
-        if user and check_password_hash(user["password_hash"], request.form.get("password", "")):
+        if user and check_password_hash(user["password_hash"], password):
+            if not user["email_verified"]:
+                return render_template_string(VERIFY_NOTICE, style=STYLE, email=user["email"], sent=False)
             session.clear()
             session["user_id"] = user["id"]
             return redirect(url_for("dashboard"))
         error = "Invalid username or password."
-    return render_template_string(AUTH, style=STYLE, title="Sign in", error=error)
+    return render_template_string(AUTH, style=STYLE, title="Sign in", mode="login", error=error, google_enabled=bool(GOOGLE_CLIENT_ID))
+
+@app.get("/verify-email/<token>")
+def verify_email(token):
+    con = db()
+    row = con.execute(
+        "SELECT id,email_verified,email_verification_token_hash,email_verification_expires_at FROM users WHERE email_verification_token_hash=?",
+        (hash_token(token),)
+    ).fetchone()
+    if not row:
+        con.close()
+        return render_template_string(MESSAGE, style=STYLE, title="Verification link invalid",
+                                      message="This verification link is invalid or has already been used.",
+                                      action_href="/login", action_text="Go to sign in"), 400
+    try:
+        expires = datetime.fromisoformat(row["email_verification_expires_at"])
+    except (TypeError, ValueError):
+        expires = datetime.now(timezone.utc) - __import__("datetime").timedelta(seconds=1)
+    if expires < datetime.now(timezone.utc):
+        con.close()
+        return render_template_string(MESSAGE, style=STYLE, title="Verification link expired",
+                                      message="Request a new verification email and try again.",
+                                      action_href="/resend-verification", action_text="Resend verification"), 400
+    con.execute("UPDATE users SET email_verified=1,email_verification_token_hash=NULL,email_verification_expires_at=NULL WHERE id=?", (row["id"],))
+    con.commit()
+    con.close()
+    return render_template_string(MESSAGE, style=STYLE, title="Email verified",
+                                  message="Your email address is verified. You can now sign in.",
+                                  action_href="/login", action_text="Sign in")
+
+@app.route("/resend-verification", methods=["GET", "POST"])
+def resend_verification():
+    email = request.form.get("email", "").strip().lower() if request.method == "POST" else ""
+    message = "Enter the email address used for the account."
+    if email:
+        con = db()
+        user = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        if user and not user["email_verified"]:
+            token = secrets.token_urlsafe(32)
+            expires = datetime.now(timezone.utc) + __import__("datetime").timedelta(hours=24)
+            con.execute("UPDATE users SET email_verification_token_hash=?,email_verification_expires_at=? WHERE id=?",
+                        (hash_token(token), expires.isoformat(), user["id"]))
+            con.commit()
+            send_verification_email(user["email"], user["username"], token)
+        con.close()
+        message = "If that address has an unverified PulseLink account, a new verification email has been requested."
+    return render_template_string(RESEND, style=STYLE, message=message)
+
+@app.get("/auth/google")
+def google_login():
+    if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
+        return render_template_string(MESSAGE, style=STYLE, title="Google sign-in not configured",
+                                      message="Set PULSELINK_GOOGLE_CLIENT_ID and PULSELINK_GOOGLE_REDIRECT_URI on the server.",
+                                      action_href="/login", action_text="Back to sign in"), 503
+    state = secrets.token_urlsafe(32)
+    session["google_oauth_state"] = state
+    params = {
+        "client_id": GOOGLE_CLIENT_ID, "redirect_uri": GOOGLE_REDIRECT_URI,
+        "response_type": "code", "scope": "openid email profile",
+        "state": state, "access_type": "online", "prompt": "select_account"
+    }
+    return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params))
+
+@app.get("/auth/google/callback")
+def google_callback():
+    if request.args.get("error"):
+        return render_template_string(MESSAGE, style=STYLE, title="Google sign-in cancelled",
+                                      message="Google did not complete the sign-in request.",
+                                      action_href="/login", action_text="Back to sign in"), 400
+    expected = session.pop("google_oauth_state", "")
+    state = request.args.get("state", "")
+    if not expected or not hmac.compare_digest(expected, state):
+        return render_template_string(MESSAGE, style=STYLE, title="Google sign-in failed",
+                                      message="The OAuth state was invalid. Start again.",
+                                      action_href="/login", action_text="Back to sign in"), 400
+    code = request.args.get("code", "")
+    if not code or not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET or not GOOGLE_REDIRECT_URI:
+        return render_template_string(MESSAGE, style=STYLE, title="Google sign-in unavailable",
+                                      message="Google OAuth is not fully configured on the server.",
+                                      action_href="/login", action_text="Back to sign in"), 503
+    try:
+        token_response = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={"code": code, "client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET,
+                  "redirect_uri": GOOGLE_REDIRECT_URI, "grant_type": "authorization_code"},
+            timeout=10,
+        )
+        token_response.raise_for_status()
+        access_token = token_response.json()["access_token"]
+        profile_response = requests.get(
+            "https://openidconnect.googleapis.com/v1/userinfo",
+            headers={"Authorization": "Bearer " + access_token}, timeout=10
+        )
+        profile_response.raise_for_status()
+        profile = profile_response.json()
+    except (requests.RequestException, ValueError, KeyError):
+        return render_template_string(MESSAGE, style=STYLE, title="Google sign-in failed",
+                                      message="Google could not complete the authentication request.",
+                                      action_href="/login", action_text="Try again"), 502
+
+    email = str(profile.get("email", "")).strip().lower()
+    google_sub = str(profile.get("sub", "")).strip()
+    if not email or not google_sub or profile.get("email_verified") not in (True, "true", "True"):
+        return render_template_string(MESSAGE, style=STYLE, title="Google email unavailable",
+                                      message="Google did not provide a verified email address.",
+                                      action_href="/login", action_text="Try again"), 400
+
+    con = db()
+    user = con.execute("SELECT * FROM users WHERE google_sub=? OR email=?", (google_sub, email)).fetchone()
+    if user:
+        con.execute("UPDATE users SET google_sub=?,email_verified=1 WHERE id=?", (google_sub, user["id"]))
+        con.commit()
+        user_id = user["id"]
+    else:
+        display_name = str(profile.get("name") or email.split("@")[0])[:100]
+        local = re.sub(r"[^a-z0-9]+", "-", email.split("@")[0].lower()).strip("-")[:28] or "google-user"
+        username = local
+        n = 2
+        while con.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
+            username = f"{local}-{n}"
+            n += 1
+        now = datetime.now(timezone.utc).isoformat()
+        cur = con.execute(
+            """INSERT INTO users(username,full_name,email,purpose,consent_at,password_hash,created_at,email_verified,google_sub)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (username, display_name, email, "Google sign-in", now,
+             generate_password_hash(secrets.token_urlsafe(48)), now, 1, google_sub)
+        )
+        con.commit()
+        user_id = cur.lastrowid
+    con.close()
+    session.clear()
+    session["user_id"] = user_id
+    return redirect(url_for("dashboard"))
 
 @app.get("/logout")
 def logout():
