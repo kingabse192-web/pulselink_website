@@ -150,6 +150,7 @@ SQLite creates the application database on first start.
 - Location sharing requires an explicit button click and browser permission.
 - File/folder sharing requires a manual selection and an explicit agreement.
 - Google sign-in is optional; users can skip it and use the username/password flow.
+- Email verification can be completed later; **Maybe later — continue to PulseLink** opens the dashboard while keeping the account marked unverified.
 - Raw visitor IP addresses are not saved.
 - Accounts are isolated by user ID.
 - For public deployment, use HTTPS, a strong secret key, persistent storage, backups, rate limiting and a clear privacy notice that matches the actual data practices.
