@@ -563,6 +563,15 @@ def delete_api(code):
     if not link:
         con.close()
         return jsonify(error="Tracking link not found."), 404
+    files = con.execute("SELECT stored_name FROM uploads WHERE link_id=?", (link["id"],)).fetchall()
+    for item in files:
+        path = os.path.join(DOWNLOAD_DIR, os.path.basename(item["stored_name"]))
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
+    con.execute("DELETE FROM uploads WHERE link_id=?", (link["id"],))
     con.execute("DELETE FROM clicks WHERE link_id=?", (link["id"],))
     con.execute("DELETE FROM links WHERE id=?", (link["id"],))
     con.commit()
