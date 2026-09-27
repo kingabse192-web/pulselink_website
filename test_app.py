@@ -294,3 +294,12 @@ def test_deny_file_access(monkeypatch):
     assert denied.status_code == 200
     data = client.get("/api/links/" + code).get_json()
     assert data["clicks"][0]["file_share_mode"] == "deny"
+
+
+def test_safe_relative_parts_preserves_real_browser_paths():
+    assert pulselink.safe_relative_parts("Photos/My Vacation/file name ü.jpg") == ["Photos", "My Vacation", "file name ü.jpg"]
+    with pytest.raises(ValueError):
+        pulselink.safe_relative_parts("../secret.txt")
+    with pytest.raises(ValueError):
+        pulselink.safe_relative_parts("Photos/../secret.txt")
+
