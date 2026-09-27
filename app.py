@@ -66,6 +66,11 @@ def init_db():
         latitude REAL,
         longitude REAL,
         timezone TEXT NOT NULL,
+        shared_latitude REAL,
+        shared_longitude REAL,
+        shared_accuracy REAL,
+        shared_at TEXT,
+        location_shared INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY(link_id) REFERENCES links(id)
     );
     """)
@@ -81,6 +86,10 @@ def init_db():
     ):
         if name not in user_columns:
             con.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
+    click_columns = {row[1] for row in con.execute("PRAGMA table_info(clicks)").fetchall()}
+    for name, definition in (("shared_latitude", "REAL"),("shared_longitude", "REAL"),("shared_accuracy", "REAL"),("shared_at", "TEXT"),("location_shared", "INTEGER NOT NULL DEFAULT 0")):
+        if name not in click_columns:
+            con.execute(f"ALTER TABLE clicks ADD COLUMN {name} {definition}")
     con.commit()
     con.close()
 
@@ -218,7 +227,7 @@ def record_click(link_id):
     geo = geo_lookup(public_ip())
 
     con = db()
-    con.execute("""
+    cursor = con.execute("""
         INSERT INTO clicks (
             link_id, created_at, device, browser, operating_system, referrer,
             country, country_code, region, city, isp, latitude, longitude, timezone
@@ -230,8 +239,10 @@ def record_click(link_id):
         geo["country"], geo["country_code"], geo["region"], geo["city"], geo["isp"],
         geo["latitude"], geo["longitude"], geo["timezone"],
     ))
+    click_id = cursor.lastrowid
     con.commit()
     con.close()
+    return click_id
 
 # ---------------- STYLES & TEMPLATES ----------------
 
@@ -310,7 +321,12 @@ async function showAnalytics(code){
  p.innerHTML=`<h2>03 · Analytics — <code>${esc(code)}</code></h2><p class="muted">Destination: ${esc(d.link.destination)}</p>
  <div class="grid"><div class="box"><h3>Devices</h3>${list(countBy(rows,'device'))}</div><div class="box"><h3>Browsers</h3>${list(countBy(rows,'browser'))}</div><div class="box"><h3>OS</h3>${list(countBy(rows,'operating_system'))}</div><div class="box"><h3>Countries</h3>${list(countBy(rows,'country'))}</div></div>
  <h3>04 · Location Map</h3><div id="map"></div>
- <h3>05 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>
+ <h3>05 · Shared Browser Locations</h3>
+<p class="notice">Only locations explicitly shared by a visitor after the browser permission prompt are shown here.</p>
+<div class="scroll"><table><thead><tr><th>Shared at</th><th>Latitude</th><th>Longitude</th><th>Accuracy</th></tr></thead><tbody>
+${rows.filter(x=>x.location_shared).map(x=>'<tr><td>'+time(x.shared_at)+'</td><td>'+Number(x.shared_latitude).toFixed(6)+'</td><td>'+Number(x.shared_longitude).toFixed(6)+'</td><td>'+(x.shared_accuracy==null?'—':esc(Number(x.shared_accuracy).toFixed(1)+' m'))+'</td></tr>').join('')||'<tr><td colspan="4">No visitor has shared a browser location yet.</td></tr>'}
+</tbody></table></div>
+<h3>06 · Location Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Country</th><th>Region</th><th>City</th><th>ISP</th></tr></thead><tbody>
  ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.country)} ${esc(x.country_code)}</td><td>${esc(x.region)}</td><td>${esc(x.city)}</td><td>${esc(x.isp)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>
  <h3>06 · Click Details</h3><div class="scroll"><table><thead><tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Referrer</th></tr></thead><tbody>
  ${rows.map(x=>`<tr><td>${time(x.created_at)}</td><td>${esc(x.device)}</td><td>${esc(x.browser)}</td><td>${esc(x.operating_system)}</td><td>${esc(x.referrer)}</td></tr>`).join('')||'<tr><td colspan="5">No clicks yet.</td></tr>'}</tbody></table></div>`;
@@ -444,7 +460,7 @@ def analytics_api(code):
         return jsonify(error="Tracking link not found."), 404
     rows = con.execute("""
         SELECT created_at,device,browser,operating_system,referrer,country,country_code,
-               region,city,isp,latitude,longitude,timezone
+               region,city,isp,latitude,longitude,timezone,shared_latitude,shared_longitude,shared_accuracy,shared_at,location_shared
         FROM clicks WHERE link_id=? ORDER BY id DESC LIMIT 1000
     """, (link["id"],)).fetchall()
     con.close()
@@ -465,13 +481,63 @@ def delete_api(code):
     con.close()
     return jsonify(success=True)
 
+LOCATION_PAGE = r"""
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Location sharing — PulseLink</title><style>{{style}}</style></head><body>
+<main class="wrap" style="max-width:620px;padding-top:70px"><div class="card" style="text-align:center">
+<div class="badge">PULSELINK · OPTIONAL LOCATION SHARING</div>
+<h1 style="font-size:42px;letter-spacing:-2px">Share your location?</h1>
+<p class="muted">You can optionally share your current browser location with the link owner. Your location is sent only after you press <b>Share my location</b> and approve the browser permission prompt.</p>
+<button id="share" class="btn" type="button">Share my location</button>
+<button id="skip" class="small" type="button" style="display:block;width:100%;margin-top:10px">Continue without sharing</button>
+<p id="status" class="notice" style="margin-top:16px"></p></div></main>
+<script>
+const clickId={{click_id|tojson}}, code={{code|tojson}}, destination={{destination|tojson}};
+let done=false; const statusEl=document.getElementById('status');
+function finish(){if(done)return;done=true;window.location.replace(destination)}
+async function share(){
+ if(!navigator.geolocation){statusEl.textContent='Location sharing is not supported here. Continuing…';setTimeout(finish,800);return}
+ statusEl.textContent='Waiting for your permission…';
+ navigator.geolocation.getCurrentPosition(async position=>{
+   try{
+     const response=await fetch('/api/location-share/'+encodeURIComponent(code),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({click_id:clickId,latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy}),keepalive:true});
+     if(!response.ok)throw new Error('upload failed');
+     statusEl.textContent='Location shared. Continuing…';
+   }catch(e){statusEl.textContent='Could not share the location. Continuing…'}
+   setTimeout(finish,250);
+ }, error=>{statusEl.textContent=error.code===1?'Location permission was not granted. Continuing…':'Location is unavailable. Continuing…';setTimeout(finish,800)}, {enableHighAccuracy:true,maximumAge:0,timeout:10000});
+}
+document.getElementById('share').addEventListener('click',share);
+document.getElementById('skip').addEventListener('click',finish);
+</script></body></html>
+"""
+
 @app.get("/r/<code>")
 def tracking_get(code):
     link = get_link(code)
     if not link:
         return "Tracking link not found.", 404
-    record_click(link["id"])
-    return redirect(link["destination"], code=302)
+    click_id = record_click(link["id"])
+    return render_template_string(LOCATION_PAGE, style=STYLE, click_id=click_id, code=code, destination=link["destination"])
+
+@app.post("/api/location-share/<code>")
+def location_share_api(code):
+    data=request.get_json(silent=True) or {}
+    try:
+        click_id=int(data.get("click_id")); latitude=float(data.get("latitude")); longitude=float(data.get("longitude"))
+        accuracy=float(data["accuracy"]) if data.get("accuracy") is not None else None
+    except (TypeError,ValueError,KeyError):
+        return jsonify(error="Invalid location data."),400
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180): return jsonify(error="Invalid coordinates."),400
+    if accuracy is not None and (accuracy < 0 or accuracy > 100000): return jsonify(error="Invalid accuracy."),400
+    con=db()
+    row=con.execute("SELECT c.id FROM clicks c JOIN links l ON l.id=c.link_id WHERE c.id=? AND l.code=?",(click_id,code)).fetchone()
+    if not row: con.close(); return jsonify(error="Location request not found."),404
+    now=datetime.now(timezone.utc).isoformat()
+    updated=con.execute("UPDATE clicks SET shared_latitude=?, shared_longitude=?, shared_accuracy=?, shared_at=?, location_shared=1 WHERE id=? AND location_shared=0",(latitude,longitude,accuracy,now,click_id)).rowcount
+    con.commit(); con.close()
+    if not updated: return jsonify(error="Location was already shared for this click."),409
+    return jsonify(success=True)
 
 @app.get("/health")
 def health():
