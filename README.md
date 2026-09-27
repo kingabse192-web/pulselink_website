@@ -169,6 +169,26 @@ When you start PulseLink with `python start.py`, the project checks the configur
 
 Set `PULSELINK_AUTO_UPDATE=0` to disable the startup check.
 
+## 🌍 Use a tracking link on another device
+
+A link generated from `127.0.0.1`, `localhost`, or a private LAN address will **not** work for a friend on a different network. PulseLink therefore supports a public base URL.
+
+For a real deployment, set:
+
+    PULSELINK_PUBLIC_BASE_URL=https://your-domain.example
+
+Then generated links use that public HTTPS URL.
+
+### Quick local public link
+
+For testing with a friend, install **cloudflared** and run:
+
+    python start_public.py
+
+The launcher creates an HTTPS Cloudflare quick tunnel to your local PulseLink server and sets `PULSELINK_PUBLIC_BASE_URL` automatically. Keep the terminal running while the link is in use. This is intended for testing; a permanent production deployment should use a real domain/server.
+
+Browser location sharing also requires a secure HTTPS context in normal deployments.
+
 ## 📦 Download and use
 
 This repository is public. Anyone can download it from GitHub with **Code → Download ZIP** or by cloning the repository.
