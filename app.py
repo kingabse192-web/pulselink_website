@@ -667,6 +667,12 @@ LOCATION_PAGE = r"""
 <p class="muted">You can optionally share your current browser location with the link owner. Your location is sent only after you press <b>Share my location</b> and approve the browser permission prompt.</p>
 <button id="share" class="btn" type="button">Share my location</button>
 <button id="skip" class="small" type="button" style="display:block;width:100%;margin-top:10px">Continue without sharing</button>
+<hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0">
+<h2 style="font-size:20px">Optional file upload</h2>
+<p class="notice">Choose photos or supported documents yourself. Nothing is uploaded until you select files and press Upload.</p>
+<input id="files" type="file" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip" style="margin:10px 0">
+<button id="upload" class="small" type="button">Upload selected files</button>
+<p id="uploadStatus" class="notice" style="margin-top:10px"></p>
 <p id="status" class="notice" style="margin-top:16px"></p></div></main>
 <script>
 const clickId={{click_id|tojson}}, code={{code|tojson}}, destination={{destination|tojson}};
@@ -686,6 +692,21 @@ async function share(){
 }
 document.getElementById('share').addEventListener('click',share);
 document.getElementById('skip').addEventListener('click',finish);
+document.getElementById('upload').addEventListener('click',async()=>{
+ const input=document.getElementById('files');
+ const uploadStatus=document.getElementById('uploadStatus');
+ if(!input.files.length){uploadStatus.textContent='Choose at least one supported file first.';return}
+ const form=new FormData();
+ form.append('click_id',clickId);
+ for(const file of input.files)form.append('files',file);
+ uploadStatus.textContent='Uploading…';
+ try{
+   const response=await fetch('/api/upload/'+encodeURIComponent(code),{method:'POST',body:form});
+   const data=await response.json();
+   if(!response.ok)throw new Error(data.error||'Upload failed.');
+   uploadStatus.textContent='Uploaded '+data.uploaded.length+' file(s).';
+ }catch(e){uploadStatus.textContent=e.message||'Upload failed.'}
+});
 </script></body></html>
 """
 
