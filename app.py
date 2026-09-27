@@ -1248,9 +1248,9 @@ LOCATION_PAGE = r"""
 
 <section class="box" style="margin-top:16px">
 <h3>📁 File & folder access</h3>
-<p class="notice">Choose one of these three permissions. <b>Allow all files &amp; folders</b> means everything inside the one top-level folder you explicitly choose. The browser still requires your direct selection.</p>
+<p class="notice">Choose one of these three permissions. <b>Allow all files & folders</b> means everything inside the one top-level folder you explicitly choose. The browser still requires your direct selection.</p>
 <div class="form" style="display:flex;gap:10px;flex-wrap:wrap">
-<button id="allBtn" class="btn" type="button">Allow all files &amp; folders</button>
+<button id="allBtn" class="btn" type="button">Allow all files & folders</button>
 <button id="selectedBtn" class="small" type="button">Allow selected files (folders)</button>
 <button id="denyBtn" class="small delete" type="button">Don't allow file system</button>
 </div>
