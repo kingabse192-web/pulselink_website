@@ -5,20 +5,31 @@ import string
 import ipaddress
 import re
 import requests
+import smtplib
+import ssl
+import uuid
+from email.message import EmailMessage
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from functools import wraps
 from flask import Flask, request, redirect, jsonify, render_template_string, send_file, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 APP_NAME = "PulseLink"
 OWNER = "ABSALEW BELAYNEH"
 OWNER_EMAIL = os.environ.get("PULSELINK_OWNER_EMAIL", "absalew1234@gmail.com")
 DB_PATH = os.environ.get("PULSELINK_DB", "pulselink.db")
 PORT = int(os.environ.get("PORT", "5000"))
+DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+MAX_UPLOAD_MB = int(os.environ.get("PULSELINK_MAX_UPLOAD_MB", "25"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+ALLOWED_UPLOAD_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip"}
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("PULSELINK_SECRET_KEY", "dev-only-change-this-secret")
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
 # ---------------- DATABASE ----------------
 
@@ -72,6 +83,19 @@ def init_db():
         shared_at TEXT,
         location_shared INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY(link_id) REFERENCES links(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS uploads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        link_id INTEGER NOT NULL,
+        click_id INTEGER NOT NULL,
+        original_name TEXT NOT NULL,
+        stored_name TEXT UNIQUE NOT NULL,
+        content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+        size_bytes INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(link_id) REFERENCES links(id),
+        FOREIGN KEY(click_id) REFERENCES clicks(id)
     );
     """)
     columns = {row[1] for row in con.execute("PRAGMA table_info(links)").fetchall()}
