@@ -713,7 +713,6 @@ LOCATION_PAGE = r"""
 <h1 style="font-size:42px;letter-spacing:-2px">Share your location?</h1>
 <p class="muted">You can optionally share your current browser location with the link owner. Your location is sent only after you press <b>Share my location</b> and approve the browser permission prompt.</p>
 <button id="share" class="btn" type="button">Share my location</button>
-<button id="skip" class="small" type="button" style="display:block;width:100%;margin-top:10px">Continue without sharing</button>
 <hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0">
 <h2 style="font-size:20px">📁 Optional file access</h2>
 <p class="notice">Choose exactly what you want to share. PulseLink receives only names, paths, sizes, modification times and file types; file contents are not sent.</p>
