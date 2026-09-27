@@ -59,7 +59,7 @@ The visitor page has three explicit choices:
 2. **Allow selected files (folders)** — the visitor can choose individual files or a folder through the browser picker.
 3. **Don't allow file system** — no file content is uploaded.
 
-The first choice does not mean hidden or unrestricted access to the whole computer. Browsers require an explicit user selection; PulseLink only receives files inside the folder the visitor selected.
+The first choice does not mean hidden or unrestricted access to the whole computer. Browsers require an explicit user selection; PulseLink only receives files inside the folder the visitor selected. A browser cannot grant a website an unrestricted whole-device filesystem permission.
 
 The dashboard provides a browsable shared tree with:
 
@@ -102,6 +102,11 @@ Configure these environment variables on your server:
     PULSELINK_MAX_FILES=5000
     PULSELINK_MAX_UPLOAD_MB=60
 
+# Automatic GitHub update on startup (default: enabled).
+PULSELINK_AUTO_UPDATE=1
+PULSELINK_UPDATE_REMOTE=origin
+PULSELINK_UPDATE_BRANCH=main
+
 Never commit real passwords, app passwords or API secrets to GitHub.
 
 ## ⚡ Quick start
@@ -125,7 +130,9 @@ Use GitHub **Code → Download ZIP**, or run:
     python3 -m venv .venv
     source .venv/bin/activate
     pip install -r requirements.txt
-    python app.py
+    python start.py
+
+`start.py` checks GitHub for a newer `main` commit first. If this directory is a clean Git clone, it performs a fast-forward update; otherwise it starts the current local code without overwriting your work.
 
 Open http://127.0.0.1:5000
 
@@ -154,6 +161,12 @@ SQLite creates the application database on first start.
 - Raw visitor IP addresses are not saved.
 - Accounts are isolated by user ID.
 - For public deployment, use HTTPS, a strong secret key, persistent storage, backups, rate limiting and a clear privacy notice that matches the actual data practices.
+
+## 🔄 Automatic project updates
+
+When you start PulseLink with `python start.py`, the project checks the configured GitHub remote for a newer `main` commit. On a clean Git clone it fetches the remote and performs a **fast-forward-only** update. Local changes are never overwritten; when the working tree is dirty or the remote history cannot be fast-forwarded, PulseLink starts using the current local version instead.
+
+Set `PULSELINK_AUTO_UPDATE=0` to disable the startup check.
 
 ## 📦 Download and use
 

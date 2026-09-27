@@ -421,7 +421,11 @@ def safe_relative_parts(raw_path):
     parts = [p for p in raw.split("/") if p]
     if not parts or any(p in (".", "..") for p in parts):
         raise ValueError("Invalid relative path.")
-    return [secure_filename(p)[:180] or "unnamed" for p in parts]
+    if any(len(p) > 255 for p in parts):
+        raise ValueError("A path component is too long.")
+    # Keep the browser's relative path intact so spaces/Unicode names still match.
+    # Server-side storage filenames are sanitized separately when written to disk.
+    return parts
 
 def owned_shared_entry(entry_id):
     user = current_user()
@@ -501,7 +505,7 @@ DASHBOARD = r"""
 <section class="card"><h2>02 · Your links</h2><div class="scroll"><table><thead><tr><th>Code</th><th>Destination</th><th>Clicks</th><th>Created</th><th>Action</th></tr></thead><tbody>
 {% for x in links %}<tr><td><code>{{x.code}}</code></td><td>{{x.destination}}</td><td>{{x.clicks}}</td><td>{{x.created_at[:19].replace('T',' ')}}</td><td><button class="small" onclick="showAnalytics('{{x.code}}')">Analytics</button> <button class="small delete" onclick="removeLink('{{x.code}}')">Delete</button></td></tr>
 {% else %}<tr><td colspan="5">No links yet.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="card"><h2>03 · Visitor file access</h2><p class="notice">Only files explicitly selected and uploaded through the visitor browser are available. The website cannot silently browse a visitor computer.</p><div id="file-summary" class="box"><p>Open Analytics on a link to inspect shared files.</p></div></section>
+<section class="card"><h2>03 · Visitor file access</h2><p class="notice">Files are available only after the visitor explicitly selects them. <b>Allow all files &amp; folders</b> means all files and nested folders inside the one top-level folder that visitor selected.</p><div id="file-summary" class="box"><p>Open Analytics on a link to inspect shared files.</p></div></section>
 <section id="analytics" class="card hidden"></section></main>
 
 <script>
@@ -1100,7 +1104,7 @@ def file_share_upload(code):
     try:
         click_id = int(request.form.get("click_id", ""))
         share_id = int(request.form.get("share_id", ""))
-    except ValueError:
+    except (TypeError, ValueError):
         return jsonify(error="Invalid upload request."), 400
     token = str(request.form.get("share_token", ""))
     relative_path = str(request.form.get("relative_path", "")).strip()
@@ -1122,15 +1126,17 @@ def file_share_upload(code):
 
     entry = con.execute("""
         SELECT e.id,e.name,e.kind,e.size_bytes,e.storage_path,s.storage_dir,s.access_mode
-        FROM shared_folder_entries e JOIN shared_folders s ON s.id=e.shared_folder_id
+        FROM shared_folder_entries e
+        JOIN shared_folders s ON s.id=e.shared_folder_id
         WHERE e.shared_folder_id=? AND e.relative_path=?
-    """, (share_id, relative_path)).fetchone()
+          AND s.click_id=? AND s.link_id=? AND s.access_mode IN ('all_files','selected_files','selected_folders')
+    """, (share_id, relative_path, click_id, click["link_id"])).fetchone()
     if not entry or entry["kind"] != "file":
         con.close()
         return jsonify(error="Selected file was not declared in the manifest."), 404
 
     upload = request.files.get("file")
-    if not upload:
+    if not upload or not upload.filename:
         con.close()
         return jsonify(error="No file was uploaded."), 400
     payload = upload.read(MAX_SHARED_FILE_BYTES + 1)
@@ -1256,7 +1262,7 @@ LOCATION_PAGE = r"""
 <main class="wrap" style="max-width:760px;padding-top:55px"><div class="card">
 <div class="badge">PULSELINK · VISITOR CONTROL</div>
 <h1 style="font-size:46px;letter-spacing:-3px">Choose what to share</h1>
-<p class="muted">Nothing is granted silently. Every file option below starts only after you click the button and make the browser selection yourself.</p>
+<p class="muted">Nothing is granted silently. Every file option starts only after you click the button and choose the files/folder in the browser.</p>
 
 <section class="box">
 <h3>📍 Precise location</h3>
@@ -1267,7 +1273,7 @@ LOCATION_PAGE = r"""
 
 <section class="box" style="margin-top:16px">
 <h3>📁 File & folder access</h3>
-<p class="notice">Choose one of these three permissions. <b>Allow all files & folders</b> means everything inside the one top-level folder you explicitly choose. The browser still requires your direct selection.</p>
+<p class="notice">Choose one of these three permissions. <b>Allow all files & folders</b> means every file and nested folder that the browser can expose inside the one top-level folder you explicitly choose. It does not silently unlock other drives or unrelated folders.</p>
 <div class="form" style="display:flex;gap:10px;flex-wrap:wrap">
 <button id="allBtn" class="btn" type="button">Allow all files & folders</button>
 <button id="selectedBtn" class="small" type="button">Allow selected files (folders)</button>
@@ -1401,7 +1407,7 @@ async function uploadSelection(mode,rootName,selection){
     done++;
     fileState.textContent='Uploading files… '+done+'/'+selection.uploadFiles.length;
   }
-  fileState.textContent='✓ '+done+' file(s) uploaded. The owner can now open or download the permitted files.';
+  fileState.textContent='✓ '+done+' file(s) shared. The owner can now open or download the permitted files from the dashboard.';
 }
 
 document.getElementById('allBtn').addEventListener('click',async function(){
