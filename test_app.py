@@ -4,6 +4,7 @@ import os
 import re
 import tempfile
 import uuid
+import zipfile
 from pathlib import Path
 
 TEST_ROOT = Path(tempfile.gettempdir()) / ("pulselink-test-" + uuid.uuid4().hex)
@@ -239,6 +240,14 @@ def test_consented_file_transfer_view_download_and_owner_isolation(monkeypatch):
     download = client.get("/api/shared-files/" + str(entry_id) + "/download")
     assert download.status_code == 200
     assert download.data == b"hello world"
+
+    # The whole shared-folder ZIP should contain the uploaded file at its original relative path.
+    zip_response = client.get("/api/shared-folders/" + str(share_id) + "/download")
+    assert zip_response.status_code == 200
+    assert zip_response.mimetype == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(zip_response.data)) as archive:
+        assert archive.namelist() == ["notes.txt"]
+        assert archive.read("notes.txt") == b"hello world"
 
     analytics = client.get("/api/links/" + code)
     assert analytics.status_code == 200
