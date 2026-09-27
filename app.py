@@ -117,6 +117,56 @@ def init_db():
     con.commit()
     con.close()
 
+def send_owner_signup_notification(full_name, email, purpose, username, created_at):
+    smtp_host = os.environ.get("PULSELINK_SMTP_HOST", "").strip()
+    smtp_user = os.environ.get("PULSELINK_SMTP_USERNAME", "").strip()
+    smtp_password = os.environ.get("PULSELINK_SMTP_PASSWORD", "")
+    if not smtp_host or not smtp_user or not smtp_password:
+        app.logger.info("Signup notification email skipped: SMTP is not configured.")
+        return False
+    try:
+        smtp_port = int(os.environ.get("PULSELINK_SMTP_PORT", "587"))
+    except ValueError:
+        smtp_port = 587
+    sender = os.environ.get("PULSELINK_SMTP_FROM", smtp_user).strip()
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = OWNER_EMAIL
+    message["Subject"] = "New PulseLink account: " + username
+    message.set_content(
+        "A new PulseLink account was created.\n\n"
+        f"Name: {full_name}\n"
+        f"Email: {email}\n"
+        f"Username: {username}\n"
+        f"Purpose: {purpose}\n"
+        f"Created: {created_at}\n"
+    )
+    try:
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=ssl.create_default_context(), timeout=10) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(message)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+                server.ehlo()
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
+                server.login(smtp_user, smtp_password)
+                server.send_message(message)
+        return True
+    except (OSError, smtplib.SMTPException) as exc:
+        app.logger.warning("Signup notification email failed: %s", exc)
+        return False
+
+def safe_upload_filename(filename):
+    cleaned = secure_filename(filename or "")
+    if not cleaned:
+        return None
+    extension = os.path.splitext(cleaned)[1].lower()
+    if extension not in ALLOWED_UPLOAD_EXTENSIONS:
+        return None
+    return cleaned
+
 def make_code(length=8):
     alphabet = string.ascii_letters + string.digits
     con = db()
