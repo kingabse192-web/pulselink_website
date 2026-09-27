@@ -382,6 +382,17 @@ def public_base_url():
         return configured
     return request.host_url.rstrip("/")
 
+def public_url_is_local():
+    base = public_base_url().lower()
+    return (
+        "://localhost" in base
+        or "://127.0.0.1" in base
+        or "://[::1]" in base
+        or "://192.168." in base
+        or "://10." in base
+        or re.search(r"://172\.(1[6-9]|2\d|3[0-1])\.", base) is not None
+    )
+
 def send_verification_email(email, username, token):
     smtp_host = os.environ.get("PULSELINK_SMTP_HOST", "").strip()
     smtp_user = os.environ.get("PULSELINK_SMTP_USERNAME", "").strip()
@@ -946,7 +957,14 @@ def create_api():
     con.execute("INSERT INTO links(user_id,code,destination,created_at) VALUES(?,?,?,?)", (user["id"], code, destination, datetime.now(timezone.utc).isoformat()))
     con.commit()
     con.close()
-    return jsonify(code=code, url=public_base_url() + "/r/" + code)
+    public_url = public_base_url() + "/r/" + code
+    is_local = public_url_is_local()
+    return jsonify(
+        code=code,
+        url=public_url,
+        public=not is_local,
+        warning=None if not is_local else "This URL is local/private. Set PULSELINK_PUBLIC_BASE_URL or run start_public.py before sharing it."
+    )
 
 @app.get("/api/links/<code>")
 @login_required
