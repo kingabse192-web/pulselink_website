@@ -545,7 +545,7 @@ document.getElementById('create').addEventListener('submit',async function(e){
   const r=await fetch('/api/links',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({destination:document.getElementById('destination').value.trim()})});
   const d=await r.json();result.classList.remove('hidden');
   if(!r.ok){result.textContent=d.error||'Could not create link.';return}
-  result.innerHTML='<b>Tracking link:</b><br><a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.url)+'</a><br><br><button class="small" onclick="copyIt(\''+esc(d.url)+'\')">Copy</button>';
+  result.innerHTML='<b>Tracking link:</b><br><a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.url)+'</a><br><br><button class="small" onclick="copyIt(\''+esc(d.url)+'\')">Copy</button>'+ (d.public?'':'<br><br><span style="color:#b91c1c"><b>⚠ Not public yet:</b> '+esc(d.warning||'Use start_public.py or configure a public HTTPS URL.')+'</span>');
  }catch(err){result.classList.remove('hidden');result.textContent='Server connection error.'}
 });
 function copyIt(u){navigator.clipboard&&navigator.clipboard.writeText(u).then(function(){alert('Copied')}).catch(function(){prompt('Copy:',u)})}
