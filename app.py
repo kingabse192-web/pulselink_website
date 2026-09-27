@@ -569,6 +569,95 @@ def delete_api(code):
     con.close()
     return jsonify(success=True)
 
+@app.post("/api/upload/<code>")
+def upload_api(code):
+    try:
+        click_id = int(request.form.get("click_id", ""))
+    except (TypeError, ValueError):
+        return jsonify(error="Invalid upload request."), 400
+
+    con = db()
+    row = con.execute("""
+        SELECT l.id AS link_id, c.id AS click_id
+        FROM links l JOIN clicks c ON c.link_id=l.id
+        WHERE l.code=? AND c.id=? AND l.enabled=1
+    """, (code, click_id)).fetchone()
+    if not row:
+        con.close()
+        return jsonify(error="Upload request not found."), 404
+
+    files = request.files.getlist("files")
+    if not files:
+        con.close()
+        return jsonify(error="Choose at least one file."), 400
+    if len(files) > 5:
+        con.close()
+        return jsonify(error="You can upload at most 5 files at once."), 400
+
+    saved_paths = []
+    uploaded = []
+    try:
+        for file in files:
+            original = safe_upload_filename(file.filename)
+            if not original:
+                raise ValueError("One or more files use an unsupported file type.")
+            stored = uuid.uuid4().hex + "_" + original
+            path = os.path.join(DOWNLOAD_DIR, stored)
+            file.save(path)
+            saved_paths.append(path)
+            size_bytes = os.path.getsize(path)
+            if size_bytes <= 0:
+                raise ValueError("Empty files are not supported.")
+            if size_bytes > MAX_UPLOAD_BYTES:
+                raise ValueError(f"Each file must be {MAX_UPLOAD_MB} MB or smaller.")
+            content_type = (file.mimetype or "application/octet-stream")[:120]
+            created_at = datetime.now(timezone.utc).isoformat()
+            con.execute("""
+                INSERT INTO uploads(link_id,click_id,original_name,stored_name,content_type,size_bytes,created_at)
+                VALUES(?,?,?,?,?,?,?)
+            """, (row["link_id"], row["click_id"], original, stored, content_type, size_bytes, created_at))
+            uploaded.append({"name": original, "size_bytes": size_bytes})
+        con.commit()
+        return jsonify(success=True, uploaded=uploaded)
+    except ValueError as exc:
+        con.rollback()
+        for path in saved_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return jsonify(error=str(exc)), 400
+    except OSError:
+        con.rollback()
+        for path in saved_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return jsonify(error="The server could not save the selected file(s)."), 500
+    finally:
+        con.close()
+
+
+@app.get("/api/uploads/<int:upload_id>/download")
+@login_required
+def download_upload(upload_id):
+    user = current_user()
+    con = db()
+    row = con.execute("""
+        SELECT u.original_name, u.stored_name
+        FROM uploads u JOIN links l ON l.id=u.link_id
+        WHERE u.id=? AND l.user_id=?
+    """, (upload_id, user["id"])).fetchone()
+    con.close()
+    if not row:
+        return "File not found.", 404
+    path = os.path.join(DOWNLOAD_DIR, os.path.basename(row["stored_name"]))
+    if not os.path.isfile(path):
+        return "File not found on disk.", 404
+    return send_file(path, as_attachment=True, download_name=row["original_name"], mimetype="application/octet-stream")
+
+
 LOCATION_PAGE = r"""
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Location sharing — PulseLink</title><style>{{style}}</style></head><body>
